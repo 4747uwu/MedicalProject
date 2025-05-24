@@ -1,0 +1,17 @@
+{
+  "studyInstanceUID": "1.2.840.10008.3.1.1.1",
+  "seriesInstanceUID": "1.2.840.10008.5.1.4.1.1.12.2",
+  "sopInstanceUID": "1.2.840.10008.1.2.1",
+  "dataLength": 9466,
+  "extractedAt": "2025-05-23T21:38:31.028Z",
+  "foundUIDs": 317,
+  "sessionInfo": {
+    "callingAET": "NODEJS",
+    "calledAET": "ORTHANC",
+    "timestamp": "2025-05-23T21:38:31.022Z",
+    "studiesReceived": [
+      "1.2.840.10008.3.1.1.1"
+    ]
+  },
+  "totalStudiesInSession": 1
+}

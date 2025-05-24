@@ -1,0 +1,15 @@
+{
+  "patientId": "1.2.840",
+  "patientName": "UNKNOWN",
+  "studyInstanceUID": "1.2.840.10008.3.1.1.1",
+  "seriesInstanceUID": "1.2.840.10008.1.1",
+  "sopInstanceUID": "1.2.840.10008.1.2.1",
+  "modality": "UNKNOWN",
+  "studyDate": "01000000",
+  "receivedAt": "2025-05-23T21:55:10.832Z",
+  "workflowStatus": "received",
+  "source": "dicom_scp",
+  "callingAET": "NODEJS",
+  "dataLength": 257,
+  "isDicomFile": false
+}
