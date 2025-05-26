@@ -91,6 +91,11 @@ export const updateWorkflowStatus = async (options) => {
   if (doctorId && ['assigned_to_doctor', 'report_in_progress'].includes(status)) {
     const doctor = await Doctor.findById(doctorId);
     if (doctor) {
+      // ENSURE activeAssignments is initialized as an array
+      if (!Array.isArray(doctor.activeAssignments)) {
+        doctor.activeAssignments = [];
+      }
+      
       // Check if assignment already exists
       const existingAssignmentIndex = doctor.activeAssignments.findIndex(
         assignment => assignment.study.toString() === studyId
@@ -125,6 +130,14 @@ export const updateWorkflowStatus = async (options) => {
     const doctor = await Doctor.findById(study.lastAssignedDoctor);
     
     if (doctor) {
+      // ENSURE both arrays are initialized
+      if (!Array.isArray(doctor.activeAssignments)) {
+        doctor.activeAssignments = [];
+      }
+      if (!Array.isArray(doctor.completedAssignments)) {
+        doctor.completedAssignments = [];
+      }
+      
       const assignmentIndex = doctor.activeAssignments.findIndex(
         assignment => assignment.study.toString() === studyId
       );

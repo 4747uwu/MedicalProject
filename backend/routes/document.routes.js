@@ -39,7 +39,7 @@ router.get('/study/:studyId/reports/:reportIndex/download',
 // Delete specific report
 router.delete('/study/:studyId/reports/:reportIndex', 
   protect, 
-  authorize('admin'),
+  authorize('admin', 'doctor_account', 'lab_staff'),
   DocumentController.deleteStudyReport
 );
 

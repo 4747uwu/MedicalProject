@@ -8,26 +8,27 @@ import User from '../models/userModel.js';
 import Lab from '../models/labModel.js';
 import Patient from '../models/patientModel.js';
 import Doctor from '../models/doctorModel.js';
+import { updateWorkflowStatus } from '../utils/workflowStatusManger.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 class DocumentController {
-  // Generate and download patient report
+  // Generate and download patient report (NO STORAGE)
   static async generatePatientReport(req, res) {
     try {
       const { studyId } = req.params;
       
       // Fetch study data with populated fields based on your schema
       const study = await DicomStudy.findById(studyId)
-      .populate({
-        path: 'lastAssignedDoctor',
-        populate: {
-          path: 'userAccount',
-          select: 'fullName'
-        }
-      })
+        .populate({
+          path: 'lastAssignedDoctor',
+          populate: {
+            path: 'userAccount',
+            select: 'fullName'
+          }
+        })
         .populate('sourceLab', 'name')
         .populate('patient', 'firstName lastName patientNameRaw');
       
@@ -64,21 +65,32 @@ class DocumentController {
         })
       };
 
-      // Generate document
+      // Generate document (but don't store it)
       const documentBuffer = await DocumentController.generateDocument('Patient Report.docx', templateData);
       
       // Create filename using patient name
       const safePatientName = patientName.replace(/[^a-zA-Z0-9]/g, '_');
       const filename = `Patient_Report_${safePatientName}_${Date.now()}.docx`;
       
-      // Save document to MongoDB
-      await DocumentController.saveDocumentToStudy(studyId, documentBuffer, filename, 'patient-report');
+      // UPDATE WORKFLOW STATUS with better error handling
+      try {
+        await updateWorkflowStatus({
+          studyId: studyId,
+          status: 'report_in_progress',
+          doctorId: study.lastAssignedDoctor?._id || null,
+          note: 'Report template generated for doctor',
+          user: req.user || null // Ensure user is not undefined
+        });
+      } catch (workflowError) {
+        console.warn('Workflow status update failed (continuing with document generation):', workflowError.message);
+        // Don't fail the entire request if workflow update fails
+      }
       
       // Set response headers for download
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       
-      // Send the document
+      // Send the document (direct download, no storage)
       res.send(documentBuffer);
       
     } catch (error) {
@@ -91,7 +103,7 @@ class DocumentController {
     }
   }
 
-  // Generic document generator function
+  // Generic document generator function (unchanged)
   static async generateDocument(templateName, data) {
     try {
       // Load the template file
@@ -112,17 +124,11 @@ class DocumentController {
         linebreaks: true,
       });
 
-      // Set the template data
-      doc.setData(data);
+      // REPLACE the deprecated .setData() method:
+      // doc.setData(data);
 
-      try {
-        // Render the document
-        doc.render();
-      } catch (error) {
-        // Handle template rendering errors
-        console.error('Template rendering error:', error);
-        throw new Error(`Template rendering failed: ${error.message}`);
-      }
+      // WITH the new .render() method that takes data:
+      doc.render(data);
 
       // Generate the document buffer
       const buffer = doc.getZip().generate({
@@ -138,52 +144,9 @@ class DocumentController {
     }
   }
 
-  // Save document to study's report section
-  static async saveDocumentToStudy(studyId, documentBuffer, filename, reportType) {
-    try {
-      // Convert buffer to base64 for storage
-      const base64Document = documentBuffer.toString('base64');
-      
-      // Create report object
-      const reportDocument = {
-        filename: filename,
-        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        data: base64Document,
-        size: documentBuffer.length,
-        reportType: reportType,
-        generatedAt: new Date(),
-        generatedBy: 'system' // You might want to pass user info here
-      };
+  // REMOVE saveDocumentToStudy method since we're not storing generated reports
 
-      // Update the study with the new report
-      const updatedStudy = await DicomStudy.findByIdAndUpdate(
-        studyId,
-        {
-          $push: {
-            'reports': reportDocument
-          },
-          $set: {
-            'reportStatus': 'generated',
-            'lastReportGenerated': new Date()
-          }
-        },
-        { new: true }
-      );
-
-      if (!updatedStudy) {
-        throw new Error('Failed to save document to study');
-      }
-
-      console.log(`Document ${filename} saved to study ${studyId}`);
-      return reportDocument;
-      
-    } catch (error) {
-      console.error('Error saving document to study:', error);
-      throw error;
-    }
-  }
-
-  // Get report from study
+  // Get report from study (only uploaded reports)
   static async getStudyReport(req, res) {
     try {
       const { studyId, reportIndex } = req.params;
@@ -197,22 +160,22 @@ class DocumentController {
         });
       }
 
-      if (!study.reports || study.reports.length === 0) {
+      if (!study.uploadedReports || study.uploadedReports.length === 0) {
         return res.status(404).json({ 
           success: false, 
-          message: 'No reports found for this study' 
+          message: 'No uploaded reports found for this study' 
         });
       }
 
       const reportIdx = parseInt(reportIndex);
-      if (reportIdx >= study.reports.length || reportIdx < 0) {
+      if (reportIdx >= study.uploadedReports.length || reportIdx < 0) {
         return res.status(404).json({ 
           success: false, 
           message: 'Report not found' 
         });
       }
 
-      const report = study.reports[reportIdx];
+      const report = study.uploadedReports[reportIdx];
       
       // Convert base64 back to buffer
       const documentBuffer = Buffer.from(report.data, 'base64');
@@ -234,12 +197,12 @@ class DocumentController {
     }
   }
 
-  // List reports for a study
+  // List reports for a study (only uploaded reports)
   static async getStudyReports(req, res) {
     try {
       const { studyId } = req.params;
       
-      const study = await DicomStudy.findById(studyId).select('reports');
+      const study = await DicomStudy.findById(studyId).select('uploadedReports workflowStatus');
       
       if (!study) {
         return res.status(404).json({ 
@@ -248,21 +211,23 @@ class DocumentController {
         });
       }
 
-      // Return only metadata, not the actual document data
-      const reportsMetadata = study.reports?.map((report, index) => ({
+      // Return only metadata of uploaded reports, not the actual document data
+      const reportsMetadata = study.uploadedReports?.map((report, index) => ({
         index: index,
         filename: report.filename,
         contentType: report.contentType,
         size: report.size,
         reportType: report.reportType,
-        generatedAt: report.generatedAt,
-        generatedBy: report.generatedBy
+        uploadedAt: report.uploadedAt,
+        uploadedBy: report.uploadedBy,
+        reportStatus: report.reportStatus
       })) || [];
 
       res.json({ 
         success: true, 
         reports: reportsMetadata,
-        totalReports: reportsMetadata.length
+        totalReports: reportsMetadata.length,
+        workflowStatus: study.workflowStatus // Include workflow status
       });
       
     } catch (error) {
@@ -275,7 +240,7 @@ class DocumentController {
     }
   }
 
-  // Delete a specific report
+  // Delete a specific uploaded report
   static async deleteStudyReport(req, res) {
     try {
       const { studyId, reportIndex } = req.params;
@@ -290,7 +255,7 @@ class DocumentController {
       }
 
       const reportIdx = parseInt(reportIndex);
-      if (!study.reports || reportIdx >= study.reports.length || reportIdx < 0) {
+      if (!study.uploadedReports || reportIdx >= study.uploadedReports.length || reportIdx < 0) {
         return res.status(404).json({ 
           success: false, 
           message: 'Report not found' 
@@ -298,12 +263,16 @@ class DocumentController {
       }
 
       // Remove the report
-      study.reports.splice(reportIdx, 1);
+      study.uploadedReports.splice(reportIdx, 1);
       
-      // Update report status if no reports left
-      if (study.reports.length === 0) {
-        study.reportStatus = 'pending';
-        study.lastReportGenerated = null;
+      // Update workflow status if no reports left
+      if (study.uploadedReports.length === 0) {
+        await updateWorkflowStatus({
+          studyId: studyId,
+          status: 'report_in_progress',
+          note: 'All uploaded reports deleted',
+          user: req.user
+        });
       }
       
       await study.save();
@@ -311,7 +280,7 @@ class DocumentController {
       res.json({ 
         success: true, 
         message: 'Report deleted successfully',
-        remainingReports: study.reports.length
+        remainingReports: study.uploadedReports.length
       });
       
     } catch (error) {
@@ -324,7 +293,102 @@ class DocumentController {
     }
   }
 
-  // Generate lab report (using actual Lab model)
+  // Upload a report document for a study (ONLY WAY TO STORE REPORTS)
+  static async uploadStudyReport(req, res) {
+    try {
+      const { studyId } = req.params;
+      const { doctorId, reportStatus } = req.body;
+      
+      // Check if file exists in the request
+      if (!req.file) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'No file uploaded' 
+        });
+      }
+      
+      const study = await DicomStudy.findById(studyId);
+      
+      if (!study) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Study not found' 
+        });
+      }
+      
+      // Find doctor's details if provided
+      let doctor = null;
+      if (doctorId) {
+        doctor = await Doctor.findById(doctorId).populate('userAccount', 'fullName');
+        if (!doctor) {
+          return res.status(404).json({
+            success: false,
+            message: 'Doctor not found'
+          });
+        }
+      }
+      
+      // Get the file from multer
+      const file = req.file;
+      
+      // Create report object for UPLOADED reports
+      const reportDocument = {
+        filename: file.originalname,
+        contentType: file.mimetype,
+        data: file.buffer.toString('base64'),
+        size: file.size,
+        reportType: 'uploaded-report',
+        uploadedAt: new Date(),
+        uploadedBy: doctor ? doctor.userAccount?.fullName : (req.user ? req.user.fullName : 'Unknown'),
+        reportStatus: reportStatus || 'finalized', // Default to finalized for uploads
+        doctorId: doctorId
+      };
+      
+      // Initialize uploadedReports array if it doesn't exist
+      if (!study.uploadedReports) {
+        study.uploadedReports = [];
+      }
+      
+      // Add to uploadedReports array (not reports array)
+      study.uploadedReports.push(reportDocument);
+      
+      // UPDATE WORKFLOW STATUS TO 'report_finalized'
+      await updateWorkflowStatus({
+        studyId: studyId,
+        status: 'report_finalized',
+        doctorId: doctorId,
+        note: `Report uploaded by ${reportDocument.uploadedBy}`,
+        user: req.user
+      });
+      
+      await study.save();
+      
+      res.json({
+        success: true,
+        message: 'Report uploaded successfully',
+        report: {
+          filename: reportDocument.filename,
+          size: reportDocument.size,
+          reportType: reportDocument.reportType,
+          reportStatus: reportDocument.reportStatus,
+          uploadedBy: reportDocument.uploadedBy,
+          uploadedAt: reportDocument.uploadedAt
+        },
+        workflowStatus: 'report_finalized',
+        ReportAvailable: true
+      });
+      
+    } catch (error) {
+      console.error('Error uploading study report:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error uploading report',
+        error: error.message 
+      });
+    }
+  }
+
+  // Generate lab report (unchanged)
   static async generateLabReport(req, res) {
     try {
       const { labId } = req.params;
@@ -342,7 +406,13 @@ class DocumentController {
       // Get recent studies for this lab
       const recentStudies = await DicomStudy.find({ sourceLab: labId })
         .populate('patient', 'firstName lastName patientNameRaw')
-        .populate('lastAssignedDoctor', 'fullName')
+        .populate({
+          path: 'lastAssignedDoctor',
+          populate: {
+            path: 'userAccount',
+            select: 'fullName'
+          }
+        })
         .sort({ createdAt: -1 })
         .limit(10);
 
@@ -374,7 +444,7 @@ class DocumentController {
 
           return {
             PatientName: patientName,
-            DoctorName: study.lastAssignedDoctor?.fullName || 'Not Assigned',
+            DoctorName: study.lastAssignedDoctor?.userAccount?.fullName || 'Not Assigned',
             StudyDate: study.studyDate || 'N/A',
             Modality: study.modalitiesInStudy?.join(', ') || 'N/A'
           };
@@ -400,7 +470,7 @@ class DocumentController {
     }
   }
 
-  // List available templates
+  // List available templates (unchanged)
   static async getAvailableTemplates(req, res) {
     try {
       const templatesDir = path.join(__dirname, '../templates');
@@ -430,100 +500,6 @@ class DocumentController {
       res.status(500).json({ 
         success: false, 
         message: 'Error fetching templates',
-        error: error.message 
-      });
-    }
-  }
-
-  // Upload a report document for a study
-  static async uploadStudyReport(req, res) {
-    try {
-      const { studyId } = req.params;
-      const { doctorId, reportStatus } = req.body;
-      
-      // Check if file exists in the request
-      if (!req.file) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'No file uploaded' 
-        });
-      }
-      
-      const study = await DicomStudy.findById(studyId);
-      
-      if (!study) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Study not found' 
-        });
-      }
-      
-      // Find doctor's details if provided
-      let doctor = null;
-      if (doctorId) {
-        doctor = await User.findById(doctorId).select('fullName');
-        if (!doctor) {
-          return res.status(404).json({
-            success: false,
-            message: 'Doctor not found'
-          });
-        }
-      }
-      
-      // Get the file from multer
-      const file = req.file;
-      
-      // Create report object
-      const reportDocument = {
-        filename: file.originalname,
-        contentType: file.mimetype,
-        data: file.buffer.toString('base64'),
-        size: file.size,
-        reportType: 'uploaded-report',
-        generatedAt: new Date(),
-        generatedBy: doctor ? doctor.fullName : req.user ? req.user.fullName : 'Unknown',
-        reportStatus: reportStatus || 'draft',
-        typedBy: req.user ? req.user.fullName : 'Unknown'
-      };
-      
-      // Update study with the new report
-      const updatedStudy = await DicomStudy.findByIdAndUpdate(
-        studyId,
-        {
-          $push: {
-            'reports': reportDocument
-          },
-          $set: {
-            'reportStatus': reportStatus || 'draft',
-            'lastReportGenerated': new Date(),
-            'workflowStatus': reportStatus === 'finalized' ? 'report_finalized' : 'report_in_progress'
-          }
-        },
-        { new: true }
-      );
-      
-      if (!updatedStudy) {
-        throw new Error('Failed to save report to study');
-      }
-      
-      res.json({
-        success: true,
-        message: 'Report uploaded successfully',
-        report: {
-          filename: reportDocument.filename,
-          size: reportDocument.size,
-          reportType: reportDocument.reportType,
-          reportStatus: reportDocument.reportStatus,
-          generatedBy: reportDocument.generatedBy,
-          generatedAt: reportDocument.generatedAt
-        }
-      });
-      
-    } catch (error) {
-      console.error('Error uploading study report:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: 'Error uploading report',
         error: error.message 
       });
     }

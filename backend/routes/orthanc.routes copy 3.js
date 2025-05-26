@@ -149,12 +149,7 @@ class SimpleJobQueue {
         throw new Error('StudyInstanceUID is missing from instance metadata.');
       }
 
-      // 🔧 FIX: Get the real Orthanc Study ID instead of creating a fake one
-      const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
-      
-      if (!orthancStudyID) {
-        console.warn(`Study ${studyInstanceUID} not found in Orthanc, saving without Orthanc Study ID`);
-      }
+      const orthancStudyID = `DERIVED_${studyInstanceUID.replace(/\./g, '_')}`;
       
       job.progress = 50;
       
@@ -173,8 +168,7 @@ class SimpleJobQueue {
       if (dicomStudyDoc) {
         console.log(`[Queue Worker] Updating existing study: ${studyInstanceUID}`);
         
-        // Only update if we have a real Orthanc Study ID and it's not already set
-        if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
+        if (!dicomStudyDoc.orthancStudyID) {
           dicomStudyDoc.orthancStudyID = orthancStudyID;
         }
         
@@ -199,7 +193,7 @@ class SimpleJobQueue {
         console.log(`[Queue Worker] Creating new study: ${studyInstanceUID}`);
         
         dicomStudyDoc = new DicomStudy({
-          orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
+          orthancStudyID: orthancStudyID,
           studyInstanceUID: studyInstanceUID,
           accessionNumber: instanceTags.AccessionNumber || '',
           patient: patientRecord._id,
@@ -521,34 +515,6 @@ async function findOrCreateSourceLab() {
     await lab.save();
   }
   return lab;
-}
-
-// Replace line 152 and the surrounding logic with this:
-async function getOrthancStudyId(studyInstanceUID) {
-  try {
-    // Search for the study by Study Instance UID to get the real Orthanc Study ID
-    const searchResponse = await axios.post(`${ORTHANC_BASE_URL}/tools/find`, {
-      Level: 'Study',
-      Query: {
-        StudyInstanceUID: studyInstanceUID
-      }
-    }, {
-      headers: { 'Authorization': orthancAuth }
-    });
-    
-    const studyIds = searchResponse.data;
-    if (studyIds.length > 0) {
-      // Return the actual Orthanc Study ID (UUID)
-      return studyIds[0];
-    } else {
-      // If study doesn't exist in Orthanc yet, return null
-      // The study might be uploaded later
-      return null;
-    }
-  } catch (error) {
-    console.error('Error searching for study in Orthanc:', error.message);
-    return null;
-  }
 }
 
 export default router;

@@ -41,7 +41,14 @@ export const getAssignedStudies = async (req, res) => {
     const studies = await DicomStudy.find(query)
       .populate('patient', 'firstName lastName patientID age gender dateOfBirth contactNumber')
       .populate('sourceLab', 'name identifier contactPerson')
-      .populate('lastAssignedDoctor', 'fullName specialization')
+      .populate({
+        path: 'lastAssignedDoctor',
+        populate: {
+          path: 'userAccount',
+          select: 'fullName email'
+        },
+        select: 'specialization department userAccount'
+      })
       .sort({ lastAssignmentAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -72,11 +79,25 @@ export const getAssignedStudies = async (req, res) => {
       workflowStatus: study.workflowStatus,
       priority: study.caseType, // Using caseType as priority
       instanceID: study.studyInstanceUID,
+      orthancStudyID: study.orthancStudyID, 
+      
       studyType: study.examType || 'N/A',
-      reportedBy: study.lastAssignedDoctor?.fullName,
+      reportedBy: study.lastAssignedDoctor?.userAccount?.fullName || 'Not Assigned',
       reportedDateTime: study.reportFinalizedAt,
-      reportContent: study.reportContent
+      reportContent: study.reportContent,
+
+      lastAssignedDoctor: study.lastAssignedDoctor ? {
+        _id: study.lastAssignedDoctor._id,
+        fullName: study.lastAssignedDoctor.userAccount?.fullName || 'Unknown Doctor',
+        specialization: study.lastAssignedDoctor.specialization || 'General',
+        department: study.lastAssignedDoctor.department || 'Not Specified',
+        userAccount: {
+          fullName: study.lastAssignedDoctor.userAccount?.fullName || 'Unknown Doctor',
+          email: study.lastAssignedDoctor.userAccount?.email || ''
+        }
+      } : null
     }));
+    console.log('Formatted studies:', formattedStudies);
 
     res.json({
       success: true,

@@ -32,6 +32,7 @@ const DoctorDashboard = () => {
         setStudies(response.data.data);
         setTotalPages(response.data.totalPages);
         setTotalRecords(response.data.totalRecords);
+        console.log('Studies fetched successfully:', response.data.data);
       }
     } catch (error) {
       console.error('Error fetching studies:', error);
@@ -64,10 +65,7 @@ const DoctorDashboard = () => {
     <div className="min-h-screen bg-gray-100">
       <UniversalNavbar />
       <div className="container w-full max-w-full mx-auto p-4 pl-12 pr-12 pt-6">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Doctor Dashboard</h1>
-          <p className="text-gray-600">Welcome, Dr. {currentUser?.firstName || 'Doctor'}</p>
-        </div>
+        
 
         <div className="mb-8">
           <div className="flex justify-between items-center mb-4">

@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/authContext';
 import { useAuth } from './hooks/useAuth';
+import ChangePasswordPage from './pages/ChangePasswordPage';
 
 // Pages
 import LoginPage from './pages/Login';
@@ -10,6 +11,8 @@ import LabDashboard from './pages/lab/Dashboard';
 import DoctorDashboard from './pages/doctor/Dashboard';
 import NewLabPage from './pages/admin/NewLabPage';
 import NewDoctorPage from './pages/admin/NewDoctorPage';
+import ForgotPasswordPage from './pages/ForgotPassword';
+import ManageDoctorsPage from './pages/ManageDoctorsPage';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { currentUser, loading } = useAuth();
@@ -42,6 +45,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           
           {/* Admin Routes */}
           <Route 
@@ -88,6 +92,25 @@ function App() {
               </ProtectedRoute>
             } 
           />
+
+          <Route 
+            path="/change-password" 
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'lab_staff', 'doctor_account']}>
+                <ChangePasswordPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/admin/doctors" 
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <ManageDoctorsPage />
+              </ProtectedRoute>
+            } 
+          />
+
+          
           
           {/* Catch-all route */}
           <Route path="*" element={<Navigate to="/login" replace />} />

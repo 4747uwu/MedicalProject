@@ -189,7 +189,13 @@ const DicomStudySchema = new mongoose.Schema({
             type: String,
             default: 'system'
         }
+        
     }],
+
+    ReportAvailable: {
+        type: Boolean,
+        default: false      
+    },
     
     reportStatus: {
         type: String,
@@ -199,7 +205,48 @@ const DicomStudySchema = new mongoose.Schema({
     
     lastReportGenerated: {
         type: Date
-    }
+    },
+
+    // Only store UPLOADED reports, not generated ones
+    uploadedReports: [{
+        filename: {
+            type: String,
+            required: true
+        },
+        contentType: {
+            type: String,
+            required: true
+        },
+        data: {
+            type: String, // base64 encoded document data
+            required: true
+        },
+        size: {
+            type: Number,
+            required: true
+        },
+        reportType: {
+            type: String,
+            default: 'uploaded-report'
+        },
+        uploadedAt: {
+            type: Date,
+            default: Date.now
+        },
+        uploadedBy: {
+            type: String,
+            required: true
+        },
+        reportStatus: {
+            type: String,
+            enum: ['draft', 'finalized'],
+            default: 'finalized'
+        },
+        doctorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Doctor'
+        }
+    }],
 
 }, { timestamps: true }); // For when this DicomStudy record itself was created/updated in DB
 

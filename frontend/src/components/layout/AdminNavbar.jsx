@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useLocation } from 'react-router-dom';
 
 const UniversalNavbar = () => {
   const { currentUser, logout } = useAuth();
   const [greeting, setGreeting] = useState('');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate(); // Add this hook
+
 
   useEffect(() => {
     // Set greeting based on time of day
@@ -37,7 +39,7 @@ const UniversalNavbar = () => {
           hoverColor: 'hover:bg-blue-500',
           activeColor: 'bg-white text-blue-600',
           links: [
-            { to: '/admin', label: 'Dashboard', exact: true },
+            { to: '/admin/dashboard', label: 'Dashboard', exact: true },
            
             { to: '/admin/doctors', label: 'Doctors' },
             { to: '/admin/labs', label: 'Labs' },
@@ -93,8 +95,8 @@ const UniversalNavbar = () => {
 
   const handleChangePassword = () => {
     // Navigate to change password page or open modal
-    console.log('Change password clicked');
-    setIsDropdownOpen(false);
+    navigate('/change-password'); // Use navigate function
+    setIsDropdownOpen(false);  
   };
 
   const handleLogout = () => {

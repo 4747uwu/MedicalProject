@@ -292,6 +292,7 @@ export const getAllStudiesForAdmin = async (req, res) => {
                 reportedDateTime: study.reportFinalizedAt, // This is when DicomStudy status became 'report_finalized'
                 location: study.sourceLab?.name || 'N/A',
                 reportedBy: reportedByDisplay,
+                ReportAvailable: study.ReportAvailable,
 
                 lastAssignedDoctor: study.lastAssignedDoctor?._id || study.lastAssignedDoctor,
     
@@ -551,7 +552,7 @@ export const getAllDoctors = async (req, res) => {
   /**
    * Admin controller to assign doctors to studies
    */
-  export const assignDoctorToStudy = async (req, res) => {
+export const assignDoctorToStudy = async (req, res) => {
     console.log('Assigning doctor to study:', req.params, req.body);
     try {
         const { studyId } = req.params;
@@ -713,4 +714,582 @@ export const getDoctorById = async (req, res) => {
     }
 };
 
+/**
+ * Update doctor details
+ */
+export const updateDoctor = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const {
+            fullName, email, username, // User fields
+            specialization, licenseNumber, department, qualifications, 
+            yearsOfExperience, contactPhoneOffice, isActiveProfile // Doctor fields
+        } = req.body;
 
+        // Find the doctor
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Check if email or username is being changed and if they're already taken
+        if (email !== doctor.userAccount.email) {
+            const existingUserWithEmail = await User.findOne({ 
+                email, 
+                _id: { $ne: doctor.userAccount._id } 
+            });
+            if (existingUserWithEmail) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Email is already in use by another user'
+                });
+            }
+        }
+
+        if (username !== doctor.userAccount.username) {
+            const existingUserWithUsername = await User.findOne({ 
+                username, 
+                _id: { $ne: doctor.userAccount._id } 
+            });
+            if (existingUserWithUsername) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Username is already in use by another user'
+                });
+            }
+        }
+
+        // Check if license number is being changed and if it's already taken
+        if (licenseNumber !== doctor.licenseNumber) {
+            const existingDoctorWithLicense = await Doctor.findOne({ 
+                licenseNumber, 
+                _id: { $ne: doctorId } 
+            });
+            if (existingDoctorWithLicense) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'License number is already in use by another doctor'
+                });
+            }
+        }
+
+        // Update user account fields
+        await User.findByIdAndUpdate(doctor.userAccount._id, {
+            fullName,
+            email,
+            username,
+            isActive: isActiveProfile !== undefined ? isActiveProfile : doctor.userAccount.isActive
+        });
+
+        // Update doctor profile fields
+        const qualificationsArray = Array.isArray(qualifications) 
+            ? qualifications 
+            : (typeof qualifications === 'string' ? qualifications.split(',').map(q => q.trim()) : []);
+
+        await Doctor.findByIdAndUpdate(doctorId, {
+            specialization,
+            licenseNumber,
+            department,
+            qualifications: qualificationsArray,
+            yearsOfExperience: yearsOfExperience ? parseInt(yearsOfExperience) : undefined,
+            contactPhoneOffice,
+            isActiveProfile: isActiveProfile !== undefined ? isActiveProfile : doctor.isActiveProfile
+        });
+
+        // Fetch updated doctor with populated user account
+        const updatedDoctor = await Doctor.findById(doctorId)
+            .populate({
+                path: 'userAccount',
+                select: 'fullName email username isActive isLoggedIn'
+            });
+
+        res.status(200).json({
+            success: true,
+            message: 'Doctor details updated successfully',
+            doctor: {
+                _id: updatedDoctor._id,
+                userId: updatedDoctor.userAccount._id,
+                fullName: updatedDoctor.userAccount.fullName,
+                email: updatedDoctor.userAccount.email,
+                username: updatedDoctor.userAccount.username,
+                specialization: updatedDoctor.specialization,
+                licenseNumber: updatedDoctor.licenseNumber,
+                department: updatedDoctor.department || 'N/A',
+                experience: updatedDoctor.yearsOfExperience ? `${updatedDoctor.yearsOfExperience} years` : 'N/A',
+                yearsOfExperience: updatedDoctor.yearsOfExperience || 0,
+                qualifications: updatedDoctor.qualifications?.join(', ') || 'N/A',
+                contactPhone: updatedDoctor.contactPhoneOffice || 'N/A',
+                isActive: updatedDoctor.isActiveProfile && updatedDoctor.userAccount.isActive,
+                isLoggedIn: updatedDoctor.userAccount.isLoggedIn,
+                createdAt: updatedDoctor.createdAt,
+                updatedAt: updatedDoctor.updatedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('Error updating doctor:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating doctor details',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Delete/Remove doctor (soft delete by deactivating)
+ */
+export const deleteDoctor = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const { forceDelete = false } = req.body;
+
+        // Find the doctor
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Check if doctor has assigned studies
+        const hasAssignedStudies = doctor.assignedStudies && doctor.assignedStudies.length > 0;
+        
+        if (hasAssignedStudies && !forceDelete) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot delete doctor with assigned studies. Please reassign studies first or use force delete.',
+                assignedStudiesCount: doctor.assignedStudies.length
+            });
+        }
+
+        if (forceDelete) {
+            // Hard delete - remove doctor and user account
+            await User.findByIdAndDelete(doctor.userAccount._id);
+            await Doctor.findByIdAndDelete(doctorId);
+            
+            res.status(200).json({
+                success: true,
+                message: `Dr. ${doctor.userAccount.fullName} has been permanently deleted`
+            });
+        } else {
+            // Soft delete - deactivate doctor and user account
+            await User.findByIdAndUpdate(doctor.userAccount._id, { isActive: false });
+            await Doctor.findByIdAndUpdate(doctorId, { isActiveProfile: false });
+            
+            res.status(200).json({
+                success: true,
+                message: `Dr. ${doctor.userAccount.fullName} has been deactivated`
+            });
+        }
+
+    } catch (error) {
+        console.error('Error deleting doctor:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting doctor',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Toggle doctor active status
+ */
+export const toggleDoctorStatus = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const { isActive } = req.body;
+
+        // Find the doctor
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Update both doctor profile and user account status
+        await Doctor.findByIdAndUpdate(doctorId, { isActiveProfile: isActive });
+        await User.findByIdAndUpdate(doctor.userAccount._id, { isActive: isActive });
+
+        const updatedDoctor = await Doctor.findById(doctorId)
+            .populate({
+                path: 'userAccount',
+                select: 'fullName email username isActive isLoggedIn'
+            });
+
+        res.status(200).json({
+            success: true,
+            message: `Dr. ${doctor.userAccount.fullName} has been ${isActive ? 'activated' : 'deactivated'}`,
+            doctor: {
+                _id: updatedDoctor._id,
+                userId: updatedDoctor.userAccount._id,
+                fullName: updatedDoctor.userAccount.fullName,
+                email: updatedDoctor.userAccount.email,
+                username: updatedDoctor.userAccount.username,
+                specialization: updatedDoctor.specialization,
+                licenseNumber: updatedDoctor.licenseNumber,
+                department: updatedDoctor.department || 'N/A',
+                experience: updatedDoctor.yearsOfExperience ? `${updatedDoctor.yearsOfExperience} years` : 'N/A',
+                yearsOfExperience: updatedDoctor.yearsOfExperience || 0,
+                qualifications: updatedDoctor.qualifications?.join(', ') || 'N/A',
+                contactPhone: updatedDoctor.contactPhoneOffice || 'N/A',
+                isActive: updatedDoctor.isActiveProfile && updatedDoctor.userAccount.isActive,
+                isLoggedIn: updatedDoctor.userAccount.isLoggedIn,
+                createdAt: updatedDoctor.createdAt,
+                updatedAt: updatedDoctor.updatedAt
+            }
+        });
+
+    } catch (error) {
+        console.error('Error toggling doctor status:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error updating doctor status',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Send custom email to doctor
+ */
+export const sendDoctorEmail = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const { subject, message, emailType = 'custom' } = req.body;
+
+        if (!subject || !message) {
+            return res.status(400).json({
+                success: false,
+                message: 'Subject and message are required'
+            });
+        }
+
+        // Find the doctor
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Prepare email content based on type
+        let emailSubject = subject;
+        let emailHtml = '';
+
+        switch (emailType) {
+            case 'reminder':
+                emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0;">
+                            <h2 style="margin: 0;">🔔 Reminder - Medical Platform</h2>
+                        </div>
+                        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e1e5e9; border-top: none; border-radius: 0 0 10px 10px;">
+                            <p>Hello Dr. ${doctor.userAccount.fullName},</p>
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                                ${message.replace(/\n/g, '<br>')}
+                            </div>
+                            <p>Best regards,<br>Medical Platform Administration</p>
+                            <hr style="border: none; border-top: 1px solid #e1e5e9; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #6c757d;">
+                                This is an automated message from the Medical Platform. Please do not reply to this email.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                break;
+
+            case 'notification':
+                emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0;">
+                            <h2 style="margin: 0;">📢 Notification - Medical Platform</h2>
+                        </div>
+                        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e1e5e9; border-top: none; border-radius: 0 0 10px 10px;">
+                            <p>Hello Dr. ${doctor.userAccount.fullName},</p>
+                            <div style="background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                                ${message.replace(/\n/g, '<br>')}
+                            </div>
+                            <p>Best regards,<br>Medical Platform Administration</p>
+                            <hr style="border: none; border-top: 1px solid #e1e5e9; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #6c757d;">
+                                This is an automated message from the Medical Platform. Please do not reply to this email.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                break;
+
+            case 'warning':
+                emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0;">
+                            <h2 style="margin: 0;">⚠️ Important Notice - Medical Platform</h2>
+                        </div>
+                        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e1e5e9; border-top: none; border-radius: 0 0 10px 10px;">
+                            <p>Hello Dr. ${doctor.userAccount.fullName},</p>
+                            <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                                <strong>Important:</strong><br>
+                                ${message.replace(/\n/g, '<br>')}
+                            </div>
+                            <p>Please take appropriate action as needed.</p>
+                            <p>Best regards,<br>Medical Platform Administration</p>
+                            <hr style="border: none; border-top: 1px solid #e1e5e9; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #6c757d;">
+                                This is an automated message from the Medical Platform. Please do not reply to this email.
+                            </p>
+                        </div>
+                    </div>
+                `;
+                break;
+
+            default: // custom
+                emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <div style="background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0;">
+                            <h2 style="margin: 0;">📧 Message from Administration</h2>
+                        </div>
+                        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e1e5e9; border-top: none; border-radius: 0 0 10px 10px;">
+                            <p>Hello Dr. ${doctor.userAccount.fullName},</p>
+                            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #6f42c1;">
+                                ${message.replace(/\n/g, '<br>')}
+                            </div>
+                            <p>Best regards,<br>Medical Platform Administration</p>
+                            <hr style="border: none; border-top: 1px solid #e1e5e9; margin: 20px 0;">
+                            <p style="font-size: 12px; color: #6c757d;">
+                                This is a message from the Medical Platform Administration.
+                            </p>
+                        </div>
+                    </div>
+                `;
+        }
+
+        // Send the email
+        await transporter.sendMail({
+            from: {
+                name: 'Medical Platform Administration',
+                address: process.env.SMTP_USER
+            },
+            to: doctor.userAccount.email,
+            subject: emailSubject,
+            html: emailHtml
+        });
+
+        console.log(`Email sent to Dr. ${doctor.userAccount.fullName} (${doctor.userAccount.email})`);
+
+        res.status(200).json({
+            success: true,
+            message: `Email sent successfully to Dr. ${doctor.userAccount.fullName}`,
+            data: {
+                recipient: {
+                    name: doctor.userAccount.fullName,
+                    email: doctor.userAccount.email
+                },
+                email: {
+                    subject: emailSubject,
+                    type: emailType,
+                    sentAt: new Date()
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error sending email to doctor:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error sending email',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get doctor statistics
+ */
+export const getDoctorStats = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Get assigned studies count
+        const assignedStudiesCount = doctor.assignedStudies ? doctor.assignedStudies.length : 0;
+
+        // Get completed studies count (reports finalized)
+        const completedStudies = await DicomStudy.countDocuments({
+            lastAssignedDoctor: doctorId,
+            workflowStatus: 'report_finalized'
+        });
+
+        // Get pending studies count
+        const pendingStudies = await DicomStudy.countDocuments({
+            lastAssignedDoctor: doctorId,
+            workflowStatus: { $in: ['assigned_to_doctor', 'in_progress'] }
+        });
+
+        // Get this month's activity
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+
+        const thisMonthCompleted = await DicomStudy.countDocuments({
+            lastAssignedDoctor: doctorId,
+            workflowStatus: 'report_finalized',
+            reportFinalizedAt: { $gte: startOfMonth }
+        });
+
+        res.status(200).json({
+            success: true,
+            stats: {
+                doctor: {
+                    name: doctor.userAccount.fullName,
+                    specialization: doctor.specialization,
+                    experience: doctor.yearsOfExperience
+                },
+                studies: {
+                    total: assignedStudiesCount,
+                    completed: completedStudies,
+                    pending: pendingStudies,
+                    thisMonth: thisMonthCompleted
+                },
+                performance: {
+                    completionRate: assignedStudiesCount > 0 ? Math.round((completedStudies / assignedStudiesCount) * 100) : 0,
+                    averageTimeToComplete: 'N/A' // Could be calculated if timestamps are available
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching doctor stats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching doctor statistics',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get all available specializations
+ */
+export const getSpecializations = async (req, res) => {
+    try {
+        const specializations = await Doctor.distinct('specialization');
+        
+        res.status(200).json({
+            success: true,
+            specializations: specializations.filter(spec => spec && spec.trim() !== '')
+        });
+
+    } catch (error) {
+        console.error('Error fetching specializations:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching specializations',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Reset doctor password (admin function)
+ */
+export const resetDoctorPassword = async (req, res) => {
+    try {
+        const { doctorId } = req.params;
+        const { sendEmail = true } = req.body;
+
+        const doctor = await Doctor.findById(doctorId).populate('userAccount');
+        if (!doctor) {
+            return res.status(404).json({
+                success: false,
+                message: 'Doctor not found'
+            });
+        }
+
+        // Generate new password
+        const newPassword = generateRandomPassword();
+
+        // Update user password
+        await User.findByIdAndUpdate(doctor.userAccount._id, {
+            password: newPassword,
+            isLoggedIn: false // Force re-login
+        });
+
+        // Send email with new password if requested
+        if (sendEmail) {
+            const emailHtml = `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <div style="background: linear-gradient(135deg, #dc3545 0%, #fd7e14 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0;">
+                        <h2 style="margin: 0;">🔑 Password Reset - Medical Platform</h2>
+                    </div>
+                    <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e1e5e9; border-top: none; border-radius: 0 0 10px 10px;">
+                        <p>Hello Dr. ${doctor.userAccount.fullName},</p>
+                        <p>Your password has been reset by the administrator.</p>
+                        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #dc3545;">
+                            <p style="margin: 5px 0;"><strong>Username:</strong> ${doctor.userAccount.username}</p>
+                            <p style="margin: 5px 0;"><strong>New Password:</strong> ${newPassword}</p>
+                        </div>
+                        <p><strong>Important:</strong> Please login and change your password immediately for security reasons.</p>
+                        <p>Best regards,<br>Medical Platform Administration</p>
+                        <hr style="border: none; border-top: 1px solid #e1e5e9; margin: 20px 0;">
+                        <p style="font-size: 12px; color: #6c757d;">
+                            This is an automated message from the Medical Platform. Please do not reply to this email.
+                        </p>
+                    </div>
+                </div>
+            `;
+
+            await transporter.sendMail({
+                from: {
+                    name: 'Medical Platform Administration',
+                    address: process.env.SMTP_USER
+                },
+                to: doctor.userAccount.email,
+                subject: 'Password Reset - Medical Platform',
+                html: emailHtml
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Password reset successfully for Dr. ${doctor.userAccount.fullName}`,
+            data: {
+                doctor: {
+                    name: doctor.userAccount.fullName,
+                    email: doctor.userAccount.email
+                },
+                newPassword: sendEmail ? 'Sent via email' : newPassword,
+                resetAt: new Date()
+            }
+        });
+
+    } catch (error) {
+        console.error('Error resetting doctor password:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error resetting password',
+            error: error.message
+        });
+    }
+};
+
+// Add these controllers to your existing admin.controller.js file
+
+/**
+ * Get all doctors with pagination and filters
+ */

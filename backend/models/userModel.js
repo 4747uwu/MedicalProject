@@ -50,6 +50,24 @@ const UserSchema = new mongoose.Schema({
     lab: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Lab',
+    },
+     // Password reset fields
+     resetPasswordOTP: {
+        type: String,
+        select: false // Don't include in queries by default for security
+    },
+    resetPasswordOTPExpires: {
+        type: Date,
+        select: false
+    },
+    resetPasswordAttempts: {
+        type: Number,
+        default: 0,
+        select: false
+    },
+    resetPasswordLockedUntil: {
+        type: Date,
+        select: false
     }
 }, { timestamps: true });
 

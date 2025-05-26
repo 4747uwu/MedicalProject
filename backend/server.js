@@ -79,6 +79,9 @@ import labRoutesEdit from './routes/labEdit.routes.js';
 import lab from './routes/lab.routes.js'; // Note .js extension
 import doctorRotues from './routes/doctor.routes.js'; // Note .js extension
 import documentRoutes from './routes/document.routes.js'
+import studyDownloadRoutes from './routes/study.download.routes.js'; // Note .js extension
+import changePasswordRoutes from './routes/changePassword.routes.js';
+import forgotPasswordRoutes from './routes/forgotPassword.routes.js';
 
 dotenv.config();
 // connectDB(); // Call this inside startServer to ensure it's awaited if async
@@ -111,6 +114,9 @@ app.use('/api/lab', labRoutesEdit);
 app.use('/api/lab', lab);
 app.use('/api/doctor', doctorRotues);
 app.use('/api/documents', documentRoutes);
+app.use('/api/orthanc-download', studyDownloadRoutes); // Assuming you have a studyDownloadRoutes.js file
+app.use('/api/auth', changePasswordRoutes);
+app.use('/api/forgot-password', forgotPasswordRoutes);
 
 
 app.use('/dicom-web', createProxyMiddleware({ 
