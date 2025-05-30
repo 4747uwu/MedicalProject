@@ -23,6 +23,7 @@
     "dicom-parser": "^1.8.21",
     "docxtemplater": "^3.63.0",
     "dotenv": "^16.5.0",
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
     "http-proxy-middleware": "^3.0.5",
@@ -30,10 +31,13 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.15.0",
     "multer": "^2.0.0",
+    "node-cache": "^5.1.2",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.3",
     "path": "^0.12.7",
-    "pizzip": "^3.2.0"
+    "pdfkit": "^0.17.1",
+    "pizzip": "^3.2.0",
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

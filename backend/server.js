@@ -82,6 +82,12 @@ import documentRoutes from './routes/document.routes.js'
 import studyDownloadRoutes from './routes/study.download.routes.js'; // Note .js extension
 import changePasswordRoutes from './routes/changePassword.routes.js';
 import forgotPasswordRoutes from './routes/forgotPassword.routes.js';
+import reportRoutes from './routes/TAT.routes.js'
+import discussionRoutes from './routes/discussion.routes.js';
+import footer from './routes/footer.routes.js'
+import websocketService from './config/webSocket.js';
+import http from 'http'; // Import http for creating the server instance
+
 
 dotenv.config();
 // connectDB(); // Call this inside startServer to ensure it's awaited if async
@@ -89,6 +95,7 @@ connectDB(); // Connect to MongoDB before starting the server
 
 const app = express();
 const PORT = process.env.PORT || 3000; // Define PORT once, this will be our HTTP_PORT
+const server = http.createServer(app); // Create HTTP server instance
 
 app.use(cors({
     origin: true, // Allow any origin, or specify your frontend URL in production
@@ -110,15 +117,18 @@ app.get('/', (req, res) => {
 app.use('/api/orthanc', orthancRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/lab', labRoutesEdit);
+app.use('/api/labEdit', labRoutesEdit);
 app.use('/api/lab', lab);
 app.use('/api/doctor', doctorRotues);
 app.use('/api/documents', documentRoutes);
 app.use('/api/orthanc-download', studyDownloadRoutes); // Assuming you have a studyDownloadRoutes.js file
 app.use('/api/auth', changePasswordRoutes);
 app.use('/api/forgot-password', forgotPasswordRoutes);
+app.use('/api/reports', reportRoutes); // Assuming you have a TAT.routes.js file
+app.use('/api', discussionRoutes);
+app.use('/api/footer', footer); // Assuming you have a footer.routes.js file
 
-
+websocketService.initialize(server);
 app.use('/dicom-web', createProxyMiddleware({ 
   
   
@@ -146,9 +156,9 @@ app.use('/dicom-web', createProxyMiddleware({
   }
 }));
 
-app.listen(PORT, () => {
-  console.log(`HTTP server listening on port ${PORT}`);
-  console.log(`API base: http://localhost:${PORT}/api`);
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔌 WebSocket available at ws://localhost:${PORT}/ws/admin`);
 });
 
 

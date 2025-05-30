@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import mongoose from 'mongoose';
 import Redis from 'ioredis';
+import websocketService from '../config/webSocket.js';
 
 // Import Mongoose Models
 import DicomStudy from '../models/dicomStudyModel.js';
@@ -94,7 +95,8 @@ class SimpleJobQueue {
     
     try {
       if (job.type === 'process-dicom-instance') {
-        job.result = await this.processDicomInstance(job);
+        // Use the standalone function instead of class method
+        job.result = await processDicomInstance(job);
         job.status = 'completed';
         console.log(`✅ Job ${job.id} completed successfully`);
       } else if (job.type === 'test-connection') {
@@ -112,156 +114,6 @@ class SimpleJobQueue {
     }
   }
 
-  async processDicomInstance(job) {
-    const { orthancInstanceId, requestId } = job.data;
-    const startTime = Date.now();
-    
-    try {
-      console.log(`[Queue Worker] 🚀 Starting job ${job.id} for instance: ${orthancInstanceId}`);
-      
-      job.progress = 10;
-      
-      // Add timeout for Orthanc request
-      const metadataUrl = `${ORTHANC_BASE_URL}/instances/${orthancInstanceId}/simplified-tags`;
-      console.log(`[Queue Worker] 🌐 Fetching from: ${metadataUrl}`);
-      
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Orthanc request timeout after 8 seconds')), 8000);
-      });
-      
-      const fetchPromise = axios.get(metadataUrl, { 
-        headers: { 'Authorization': orthancAuth },
-        timeout: 7000
-      });
-      
-      const metadataResponse = await Promise.race([fetchPromise, timeoutPromise]);
-      
-      const elapsedTime = Date.now() - startTime;
-      console.log(`[Queue Worker] ✅ Metadata fetched in ${elapsedTime}ms`);
-      
-      job.progress = 30;
-      
-      const instanceTags = metadataResponse.data;
-      const sopInstanceUID = instanceTags.SOPInstanceUID;
-      const studyInstanceUID = instanceTags.StudyInstanceUID;
-
-      if (!studyInstanceUID) {
-        throw new Error('StudyInstanceUID is missing from instance metadata.');
-      }
-
-      // 🔧 FIX: Get the real Orthanc Study ID instead of creating a fake one
-      const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
-      
-      if (!orthancStudyID) {
-        console.warn(`Study ${studyInstanceUID} not found in Orthanc, saving without Orthanc Study ID`);
-      }
-      
-      job.progress = 50;
-      
-      // Database operations
-      const patientRecord = await findOrCreatePatientFromTags(instanceTags);
-      const labRecord = await findOrCreateSourceLab();
-      
-      job.progress = 70;
-      
-      // Simplified database update (without transactions for now)
-      let dicomStudyDoc = await DicomStudy.findOne({ studyInstanceUID: studyInstanceUID });
-
-      const modalitiesInStudySet = new Set(dicomStudyDoc?.modalitiesInStudy || []);
-      if(instanceTags.Modality) modalitiesInStudySet.add(instanceTags.Modality);
-
-      if (dicomStudyDoc) {
-        console.log(`[Queue Worker] Updating existing study: ${studyInstanceUID}`);
-        
-        // Only update if we have a real Orthanc Study ID and it's not already set
-        if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
-          dicomStudyDoc.orthancStudyID = orthancStudyID;
-        }
-        
-        dicomStudyDoc.patient = patientRecord._id;
-        dicomStudyDoc.sourceLab = labRecord._id;
-        dicomStudyDoc.modalitiesInStudy = Array.from(modalitiesInStudySet);
-        dicomStudyDoc.accessionNumber = dicomStudyDoc.accessionNumber || instanceTags.AccessionNumber;
-        dicomStudyDoc.studyDate = dicomStudyDoc.studyDate || instanceTags.StudyDate;
-        dicomStudyDoc.studyTime = dicomStudyDoc.studyTime || instanceTags.StudyTime;
-        dicomStudyDoc.examDescription = dicomStudyDoc.examDescription || instanceTags.StudyDescription;
-        
-        if (dicomStudyDoc.workflowStatus === 'no_active_study') {
-          dicomStudyDoc.workflowStatus = 'new_study_received';
-        }
-        
-        dicomStudyDoc.statusHistory.push({
-          status: 'new_study_received',
-          changedAt: new Date(),
-          note: `Instance ${sopInstanceUID} processed asynchronously (Job ${job.id}).`
-        });
-      } else {
-        console.log(`[Queue Worker] Creating new study: ${studyInstanceUID}`);
-        
-        dicomStudyDoc = new DicomStudy({
-          orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
-          studyInstanceUID: studyInstanceUID,
-          accessionNumber: instanceTags.AccessionNumber || '',
-          patient: patientRecord._id,
-          sourceLab: labRecord._id,
-          studyDate: instanceTags.StudyDate || '',
-          studyTime: instanceTags.StudyTime || '',
-          modalitiesInStudy: Array.from(modalitiesInStudySet),
-          examDescription: instanceTags.StudyDescription || '',
-          workflowStatus: 'new_study_received',
-          statusHistory: [{
-            status: 'new_study_received',
-            changedAt: new Date(),
-            note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}).`
-          }],
-        });
-      }
-      
-      await dicomStudyDoc.save();
-      
-      job.progress = 100;
-      
-      // Store result in Redis
-      const result = {
-        success: true,
-        orthancInstanceId: orthancInstanceId,
-        studyDatabaseId: dicomStudyDoc._id,
-        patientId: patientRecord._id,
-        sopInstanceUID: sopInstanceUID,
-        studyInstanceUID: studyInstanceUID,
-        processedAt: new Date(),
-        elapsedTime: Date.now() - startTime,
-        metadataSummary: {
-          patientName: patientRecord.patientNameRaw,
-          patientId: patientRecord.patientID,
-          modality: instanceTags.Modality || 'Unknown',
-          studyDate: instanceTags.StudyDate || 'Unknown'
-        }
-      };
-      
-      // Store result for 1 hour
-      await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(result));
-      
-      console.log(`[Queue Worker] Successfully processed job ${job.id} for study: ${studyInstanceUID}`);
-      return result;
-      
-    } catch (error) {
-      const elapsedTime = Date.now() - startTime;
-      console.error(`[Queue Worker] ❌ Job ${job.id} failed after ${elapsedTime}ms:`, error.message);
-      
-      const errorResult = {
-        success: false,
-        error: error.message,
-        elapsedTime: elapsedTime,
-        orthancInstanceId: orthancInstanceId,
-        failedAt: new Date()
-      };
-      
-      await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
-      throw error;
-    }
-  }
-
   getWaitingJobs() {
     return Array.from(this.jobs.values()).filter(job => job.status === 'waiting');
   }
@@ -272,6 +124,293 @@ class SimpleJobQueue {
 
   getJobByRequestId(requestId) {
     return Array.from(this.jobs.values()).find(job => job.data.requestId === requestId);
+  }
+}
+
+// FIXED: Single standalone processDicomInstance function
+async function processDicomInstance(job) {
+  const { orthancInstanceId, requestId } = job.data;
+  const startTime = Date.now();
+  
+  try {
+    console.log(`[Queue Worker] 🚀 Starting job ${job.id} for instance: ${orthancInstanceId}`);
+    
+    job.progress = 10;
+    
+    // Enhanced timeout for Orthanc request with retry logic
+    const metadataUrl = `${ORTHANC_BASE_URL}/instances/${orthancInstanceId}/simplified-tags`;
+    console.log(`[Queue Worker] 🌐 Fetching metadata from: ${metadataUrl}`);
+    
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Orthanc request timeout after 8 seconds')), 8000);
+    });
+    
+    const fetchPromise = axios.get(metadataUrl, { 
+      headers: { 'Authorization': orthancAuth },
+      timeout: 7000
+    });
+    
+    const metadataResponse = await Promise.race([fetchPromise, timeoutPromise]);
+    
+    const elapsedTime = Date.now() - startTime;
+    console.log(`[Queue Worker] ✅ Metadata fetched in ${elapsedTime}ms`);
+    
+    job.progress = 25;
+    
+    const instanceTags = metadataResponse.data;
+    const sopInstanceUID = instanceTags.SOPInstanceUID;
+    const studyInstanceUID = instanceTags.StudyInstanceUID;
+    const seriesInstanceUID = instanceTags.SeriesInstanceUID;
+
+    if (!studyInstanceUID) {
+      throw new Error('StudyInstanceUID is missing from instance metadata.');
+    }
+
+    console.log(`[Queue Worker] 📋 Processing study: ${studyInstanceUID}`);
+    console.log(`[Queue Worker] 🔍 Instance details:`, {
+      sopInstanceUID,
+      seriesInstanceUID,
+      modality: instanceTags.Modality,
+      institutionName: instanceTags.InstitutionName
+    });
+
+    job.progress = 35;
+
+    console.log(`[Queue Worker] 🏥 Available DICOM tags for lab identification:`, {
+      InstitutionName: instanceTags.InstitutionName,
+      StationName: instanceTags.StationName,
+      Manufacturer: instanceTags.Manufacturer,
+      PerformingPhysicianName: instanceTags.PerformingPhysicianName,
+      ReferringPhysicianName: instanceTags.ReferringPhysicianName
+    });
+
+    // Get the real Orthanc Study ID
+    const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
+    
+    if (!orthancStudyID) {
+      console.warn(`Study ${studyInstanceUID} not found in Orthanc, saving without Orthanc Study ID`);
+    }
+    
+    job.progress = 50;
+    
+    // Enhanced database operations with better lab handling
+    const patientRecord = await findOrCreatePatientFromTags(instanceTags);
+    
+    // Pass instanceTags to the enhanced lab function
+    const labRecord = await findOrCreateSourceLab(instanceTags);
+    
+    job.progress = 70;
+    
+    console.log(`[Queue Worker] 👤 Patient: ${patientRecord.patientNameRaw} (ID: ${patientRecord.patientID})`);
+    console.log(`[Queue Worker] 🏥 Lab: ${labRecord.name} (ID: ${labRecord._id})`);
+    
+    // Enhanced study processing
+    let dicomStudyDoc = await DicomStudy.findOne({ studyInstanceUID: studyInstanceUID });
+
+    const modalitiesInStudySet = new Set(dicomStudyDoc?.modalitiesInStudy || []);
+    if(instanceTags.Modality) modalitiesInStudySet.add(instanceTags.Modality);
+
+    if (dicomStudyDoc) {
+      console.log(`[Queue Worker] 📝 Updating existing study: ${studyInstanceUID}`);
+      
+      // Only update if we have a real Orthanc Study ID and it's not already set
+      if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
+        dicomStudyDoc.orthancStudyID = orthancStudyID;
+      }
+      
+      // FIXED: Update lab assignment with proper previous lab name retrieval
+      const currentLabId = dicomStudyDoc.sourceLab?.toString();
+      const newLabId = labRecord._id.toString();
+      
+      if (currentLabId !== newLabId) {
+        // Get the previous lab name for proper audit trail
+        let previousLabName = 'Unknown Lab';
+        if (currentLabId) {
+          try {
+            const previousLab = await Lab.findById(currentLabId);
+            previousLabName = previousLab ? previousLab.name : 'Unknown Lab';
+          } catch (labError) {
+            console.warn(`Could not retrieve previous lab name for ${currentLabId}`);
+          }
+        }
+        
+        console.log(`[Queue Worker] 🔄 Lab changed from ${currentLabId} (${previousLabName}) to ${newLabId} (${labRecord.name})`);
+        dicomStudyDoc.sourceLab = labRecord._id;
+        
+        // FIXED: Add status history entry for lab change with correct previous lab name
+        dicomStudyDoc.statusHistory.push({
+          status: dicomStudyDoc.workflowStatus,
+          changedAt: new Date(),
+          note: `Lab assignment updated from "${previousLabName}" to "${labRecord.name}" (Instance: ${sopInstanceUID}, Job: ${job.id})`
+        });
+      }
+      
+      // Update patient and study details
+      dicomStudyDoc.patient = patientRecord._id;
+      dicomStudyDoc.modalitiesInStudy = Array.from(modalitiesInStudySet);
+      dicomStudyDoc.accessionNumber = dicomStudyDoc.accessionNumber || instanceTags.AccessionNumber;
+      dicomStudyDoc.studyDate = dicomStudyDoc.studyDate || instanceTags.StudyDate;
+      dicomStudyDoc.studyTime = dicomStudyDoc.studyTime || instanceTags.StudyTime;
+      dicomStudyDoc.examDescription = dicomStudyDoc.examDescription || instanceTags.StudyDescription;
+      
+      // Update institution information if available
+      if (instanceTags.InstitutionName) {
+        dicomStudyDoc.institutionName = instanceTags.InstitutionName;
+      }
+      
+      // ADD/UPDATE DICOM FILES ARRAY (without Wasabi)
+      if (!dicomStudyDoc.dicomFiles) {
+        dicomStudyDoc.dicomFiles = [];
+      }
+      
+      // Check if this instance is already recorded
+      const existingFileIndex = dicomStudyDoc.dicomFiles.findIndex(
+        file => file.sopInstanceUID === sopInstanceUID
+      );
+      
+      const dicomFileEntry = {
+        sopInstanceUID: sopInstanceUID,
+        seriesInstanceUID: seriesInstanceUID,
+        orthancInstanceId: orthancInstanceId,
+        modality: instanceTags.Modality || 'Unknown',
+        storageType: 'orthanc', // Store in Orthanc for now
+        uploadedAt: new Date()
+      };
+      
+      if (existingFileIndex >= 0) {
+        // Update existing file entry
+        dicomStudyDoc.dicomFiles[existingFileIndex] = dicomFileEntry;
+        console.log(`[Queue Worker] 🔄 Updated existing DICOM file entry for SOP: ${sopInstanceUID}`);
+      } else {
+        // Add new file entry
+        dicomStudyDoc.dicomFiles.push(dicomFileEntry);
+        console.log(`[Queue Worker] ➕ Added new DICOM file entry for SOP: ${sopInstanceUID}`);
+      }
+      
+      if (dicomStudyDoc.workflowStatus === 'no_active_study') {
+        dicomStudyDoc.workflowStatus = 'new_study_received';
+      }
+      
+      dicomStudyDoc.statusHistory.push({
+        status: 'instance_processed',
+        changedAt: new Date(),
+        note: `Instance ${sopInstanceUID} processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - Stored in Orthanc`
+      });
+      
+    } else {
+      console.log(`[Queue Worker] 🆕 Creating new study: ${studyInstanceUID}`);
+      
+      // CREATE DICOM FILES ARRAY FOR NEW STUDY
+      const dicomFileEntry = {
+        sopInstanceUID: sopInstanceUID,
+        seriesInstanceUID: seriesInstanceUID,
+        orthancInstanceId: orthancInstanceId,
+        modality: instanceTags.Modality || 'Unknown',
+        storageType: 'orthanc', // Store in Orthanc for now
+        uploadedAt: new Date()
+      };
+      
+      dicomStudyDoc = new DicomStudy({
+        orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
+        studyInstanceUID: studyInstanceUID,
+        accessionNumber: instanceTags.AccessionNumber || '',
+        patient: patientRecord._id,
+        sourceLab: labRecord._id,
+        studyDate: instanceTags.StudyDate || '',
+        studyTime: instanceTags.StudyTime || '',
+        modalitiesInStudy: Array.from(modalitiesInStudySet),
+        examDescription: instanceTags.StudyDescription || '',
+        institutionName: instanceTags.InstitutionName || '',
+        workflowStatus: 'new_study_received',
+        dicomFiles: [dicomFileEntry], // Add the first DICOM file
+        statusHistory: [{
+          status: 'new_study_received',
+          changedAt: new Date(),
+          note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - Stored in Orthanc`
+        }],
+      });
+    }
+    
+    await dicomStudyDoc.save();
+    
+    job.progress = 90;
+    
+    // Enhanced WebSocket notification with lab information
+    const studyNotificationData = {
+      _id: dicomStudyDoc._id,
+      patientName: patientRecord.patientNameRaw,
+      patientId: patientRecord.patientID,
+      modality: instanceTags.Modality || 'Unknown',
+      location: labRecord.name,
+      labId: labRecord._id,
+      institutionName: instanceTags.InstitutionName || '',
+      studyDate: instanceTags.StudyDate,
+      workflowStatus: dicomStudyDoc.workflowStatus,
+      priority: dicomStudyDoc.caseType || 'routine',
+      accessionNumber: dicomStudyDoc.accessionNumber,
+      isNewLab: labRecord.createdAt > new Date(Date.now() - 5000), // Lab created in last 5 seconds
+      fileCount: dicomStudyDoc.dicomFiles?.length || 0,
+      storageType: 'orthanc'
+    };
+
+    // Notify admins about new study
+    try {
+      websocketService.notifyNewStudy(studyNotificationData);
+    } catch (wsError) {
+      console.warn(`[Queue Worker] ⚠️ WebSocket notification failed:`, wsError.message);
+    }
+    
+    job.progress = 100;
+    
+    // Enhanced result data
+    const result = {
+      success: true,
+      orthancInstanceId: orthancInstanceId,
+      studyDatabaseId: dicomStudyDoc._id,
+      patientId: patientRecord._id,
+      labId: labRecord._id,
+      sopInstanceUID: sopInstanceUID,
+      studyInstanceUID: studyInstanceUID,
+      seriesInstanceUID: seriesInstanceUID,
+      processedAt: new Date(),
+      elapsedTime: Date.now() - startTime,
+      storage: {
+        type: 'orthanc',
+        orthancInstanceId: orthancInstanceId
+      },
+      metadataSummary: {
+        patientName: patientRecord.patientNameRaw,
+        patientId: patientRecord.patientID,
+        modality: instanceTags.Modality || 'Unknown',
+        studyDate: instanceTags.StudyDate || 'Unknown',
+        labName: labRecord.name,
+        institutionName: instanceTags.InstitutionName || 'Unknown',
+        fileCount: dicomStudyDoc.dicomFiles?.length || 0
+      }
+    };
+    
+    // Store result for 1 hour
+    await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(result));
+    
+    console.log(`[Queue Worker] ✅ Successfully processed job ${job.id} for study: ${studyInstanceUID}, Lab: ${labRecord.name}`);
+    return result;
+    
+  } catch (error) {
+    const elapsedTime = Date.now() - startTime;
+    console.error(`[Queue Worker] ❌ Job ${job.id} failed after ${elapsedTime}ms:`, error.message);
+    console.error('Stack trace:', error.stack);
+    
+    const errorResult = {
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      elapsedTime: elapsedTime,
+      orthancInstanceId: orthancInstanceId,
+      failedAt: new Date()
+    };
+    
+    await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
+    throw error;
   }
 }
 
@@ -509,45 +648,269 @@ function formatDicomDateToISO(dicomDate) {
   }
 }
 
-async function findOrCreateSourceLab() {
-  const labIdentifier = 'ORTHANC_HTTP_SOURCE';
-  let lab = await Lab.findOne({ identifier: labIdentifier });
-  if (!lab) {
-    lab = new Lab({
-      name: 'Primary Orthanc Instance (HTTP Source)',
-      identifier: labIdentifier,
-      isActive: true,
-    });
-    await lab.save();
+// 🔧 ENHANCED: Better DICOM lab name processing
+function extractLabInformation(instanceTags) {
+  const possibleLabSources = [
+    instanceTags.InstitutionName,           
+    instanceTags.InstitutionAddress,        
+    instanceTags.StationName,               
+    instanceTags.Manufacturer,              
+    instanceTags.ManufacturerModelName,     
+    instanceTags.PerformingPhysicianName,   
+    instanceTags.ReferringPhysicianName,    
+    instanceTags.RequestingPhysician,       
+    instanceTags.SendingAETitle,            
+    instanceTags.SourceApplicationEntityTitle 
+  ];
+
+  // 🔧 ENHANCED: Better processing for DICOM-style names
+  for (const source of possibleLabSources) {
+    if (source && typeof source === 'string' && source.trim().length > 0) {
+      const rawName = source.trim();
+      
+      // 🔧 NEW: Handle different DICOM naming patterns
+      let processedName = rawName;
+      let identifier = rawName;
+      
+      // Check if it's a DICOM study description pattern (like your example)
+      if (isDicomStudyDescriptionPattern(rawName)) {
+        // For study descriptions, use a more readable format
+        processedName = formatDicomStudyDescription(rawName);
+        identifier = rawName.toUpperCase(); // Keep original format for identifier
+      } else {
+        // For institution names, clean but preserve readability
+        processedName = cleanInstitutionName(rawName);
+        identifier = processedName.toUpperCase().replace(/\s+/g, '_');
+      }
+      
+      if (processedName.length >= 3) {
+        return {
+          name: processedName,
+          identifier: identifier,
+          sourceTag: 'DICOM_EXTRACTED',
+          originalValue: rawName,
+          sourceField: getSourceFieldName(instanceTags, source)
+        };
+      }
+    }
   }
-  return lab;
+
+  return null;
 }
 
-// Replace line 152 and the surrounding logic with this:
-async function getOrthancStudyId(studyInstanceUID) {
+// 🔧 NEW: Detect if string is a DICOM study description pattern
+function isDicomStudyDescriptionPattern(text) {
+  // Pattern: Contains underscores, mixed case, protocol-like naming
+  const patterns = [
+    /_[A-Z]{2,}\d+_/, // Like "_HN20_", "_SP32ch"
+    /^[A-Za-z]+_[A-Z]{2,}_/, // Like "Carotids_CE_"
+    /_different_|_various_|_position/i, // Common study description words
+    /[A-Z]{2,}\d+[a-z]{2,}$/ // Like "SP32ch" at the end
+  ];
+  
+  return patterns.some(pattern => pattern.test(text));
+}
+
+// 🔧 NEW: Format DICOM study descriptions for readability
+function formatDicomStudyDescription(text) {
+  return text
+    .replace(/_/g, ' ') // Replace underscores with spaces
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space before capitals
+    .replace(/\b([A-Z]{2,})(\d+)\b/g, '$1 $2') // Space between letters and numbers
+    .replace(/\s+/g, ' ') // Clean up multiple spaces
+    .trim();
+}
+
+// 🔧 NEW: Clean institution names while preserving meaning
+function cleanInstitutionName(text) {
+  return text
+    .replace(/[^a-zA-Z0-9\s\-_&]/g, '') // Remove special chars except common ones
+    .replace(/_/g, ' ') // Convert underscores to spaces for readability
+    .replace(/\s+/g, ' ') // Clean up spaces
+    .trim();
+}
+
+// 🔧 NEW: Identify which DICOM field provided the lab name
+function getSourceFieldName(instanceTags, sourceValue) {
+  const fieldMap = {
+    [instanceTags.InstitutionName]: 'InstitutionName',
+    [instanceTags.StationName]: 'StationName',
+    [instanceTags.Manufacturer]: 'Manufacturer',
+    [instanceTags.ManufacturerModelName]: 'ManufacturerModelName',
+    [instanceTags.PerformingPhysicianName]: 'PerformingPhysicianName',
+    [instanceTags.ReferringPhysicianName]: 'ReferringPhysicianName'
+  };
+  
+  return fieldMap[sourceValue] || 'Unknown';
+}
+
+// 🔧 ENHANCED: Better lab finder with flexible matching
+async function findOrCreateSourceLab(instanceTags = null) {
+  const DEFAULT_LAB = {
+    name: 'Primary Orthanc Instance (HTTP Source)',
+    identifier: 'ORTHANC_HTTP_SOURCE',
+    isActive: true,
+  };
+
   try {
-    // Search for the study by Study Instance UID to get the real Orthanc Study ID
-    const searchResponse = await axios.post(`${ORTHANC_BASE_URL}/tools/find`, {
-      Level: 'Study',
-      Query: {
-        StudyInstanceUID: studyInstanceUID
-      }
-    }, {
-      headers: { 'Authorization': orthancAuth }
-    });
-    
-    const studyIds = searchResponse.data;
-    if (studyIds.length > 0) {
-      // Return the actual Orthanc Study ID (UUID)
-      return studyIds[0];
-    } else {
-      // If study doesn't exist in Orthanc yet, return null
-      // The study might be uploaded later
-      return null;
+    let labInfo = null;
+    if (instanceTags) {
+      labInfo = extractLabInformation(instanceTags);
     }
+
+    if (labInfo) {
+      console.log(`🏥 Extracted lab info from DICOM: ${labInfo.name} (${labInfo.identifier})`);
+      console.log(`🔍 Original value: "${labInfo.originalValue}" from field: ${labInfo.sourceField}`);
+      
+      // 🔧 ENHANCED: Multiple search strategies
+      let lab = await findLabByMultipleStrategies(labInfo);
+
+      if (lab) {
+        console.log(`✅ Found existing lab: ${lab.name} (ID: ${lab._id})`);
+        
+        // 🔧 NEW: Update lab with additional information if available
+        await updateLabWithDicomInfo(lab, instanceTags, labInfo);
+        
+        return lab;
+      }
+
+      // 🔧 ENHANCED: Create new lab with better metadata
+      console.log(`🆕 Creating new lab: ${labInfo.name}`);
+      lab = new Lab({
+        name: labInfo.name,
+        identifier: labInfo.identifier,
+        isActive: true,
+        notes: `Auto-created from DICOM ${labInfo.sourceField} field on ${new Date().toISOString()}. Original value: "${labInfo.originalValue}"`,
+        contactPerson: instanceTags.PerformingPhysicianName || instanceTags.ReferringPhysicianName || '',
+        metadata: {
+          sourceField: labInfo.sourceField,
+          originalDicomValue: labInfo.originalValue,
+          extractionPattern: isDicomStudyDescriptionPattern(labInfo.originalValue) ? 'study_description' : 'institution_name',
+          createdFromInstance: true
+        },
+        // Add institution address if available
+        address: instanceTags.InstitutionAddress ? {
+          street: instanceTags.InstitutionAddress,
+          city: '',
+          state: '',
+          zipCode: '',
+          country: ''
+        } : undefined
+      });
+
+      await lab.save();
+      console.log(`✅ Created new lab: ${lab.name} (ID: ${lab._id})`);
+      return lab;
+    }
+
+    // Fallback to default lab
+    console.log(`🔄 No lab info found in DICOM tags, using default lab`);
+    let defaultLab = await Lab.findOne({ identifier: DEFAULT_LAB.identifier });
+    
+    if (!defaultLab) {
+      console.log(`🆕 Creating default lab: ${DEFAULT_LAB.name}`);
+      defaultLab = new Lab(DEFAULT_LAB);
+      await defaultLab.save();
+    }
+
+    return defaultLab;
+
   } catch (error) {
-    console.error('Error searching for study in Orthanc:', error.message);
-    return null;
+    console.error('❌ Error in findOrCreateSourceLab:', error);
+    
+    // Emergency fallback
+    try {
+      let emergencyLab = await Lab.findOne({ isActive: true });
+      if (!emergencyLab) {
+        emergencyLab = new Lab({
+          ...DEFAULT_LAB,
+          name: 'Emergency Default Lab',
+          identifier: 'EMERGENCY_DEFAULT'
+        });
+        await emergencyLab.save();
+      }
+      return emergencyLab;
+    } catch (emergencyError) {
+      console.error('❌ Emergency lab creation failed:', emergencyError);
+      throw new Error('Failed to create or find any lab');
+    }
+  }
+}
+
+// 🔧 NEW: Multiple search strategies for finding labs
+async function findLabByMultipleStrategies(labInfo) {
+  // Strategy 1: Exact name match (case-insensitive)
+  let lab = await Lab.findOne({ 
+    name: { $regex: new RegExp(`^${escapeRegex(labInfo.name)}$`, 'i') }
+  });
+  if (lab) return lab;
+
+  // Strategy 2: Exact identifier match
+  lab = await Lab.findOne({ 
+    identifier: labInfo.identifier 
+  });
+  if (lab) return lab;
+
+  // Strategy 3: Original value match in metadata
+  lab = await Lab.findOne({ 
+    'metadata.originalDicomValue': labInfo.originalValue 
+  });
+  if (lab) return lab;
+
+  // Strategy 4: Fuzzy name matching (for similar institution names)
+  const nameParts = labInfo.name.split(' ').filter(part => part.length > 2);
+  if (nameParts.length > 0) {
+    const fuzzyPattern = nameParts.map(part => `(?=.*${escapeRegex(part)})`).join('');
+    lab = await Lab.findOne({
+      name: { $regex: new RegExp(fuzzyPattern, 'i') }
+    });
+    if (lab) {
+      console.log(`🔍 Found lab via fuzzy matching: ${lab.name}`);
+      return lab;
+    }
+  }
+
+  return null;
+}
+
+// 🔧 NEW: Escape special regex characters
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 🔧 NEW: Update existing lab with new DICOM information
+async function updateLabWithDicomInfo(lab, instanceTags, labInfo) {
+  try {
+    let updated = false;
+    
+    // Update contact person if not set and available
+    if (!lab.contactPerson && (instanceTags.PerformingPhysicianName || instanceTags.ReferringPhysicianName)) {
+      lab.contactPerson = instanceTags.PerformingPhysicianName || instanceTags.ReferringPhysicianName;
+      updated = true;
+    }
+    
+    // Update metadata if not present
+    if (!lab.metadata) {
+      lab.metadata = {
+        sourceField: labInfo.sourceField,
+        originalDicomValue: labInfo.originalValue,
+        extractionPattern: isDicomStudyDescriptionPattern(labInfo.originalValue) ? 'study_description' : 'institution_name',
+        lastSeenInInstance: new Date()
+      };
+      updated = true;
+    } else {
+      // Update last seen timestamp
+      lab.metadata.lastSeenInInstance = new Date();
+      updated = true;
+    }
+    
+    if (updated) {
+      await lab.save();
+      console.log(`🔄 Updated lab metadata for: ${lab.name}`);
+    }
+    
+  } catch (error) {
+    console.warn(`⚠️ Could not update lab metadata:`, error.message);
   }
 }
 

@@ -48,12 +48,12 @@ const router = express.Router();
 router.post('/labs/register', protect, authorize('admin'), registerLabAndStaff);
 router.post('/doctors/register', protect, authorize('admin'), registerDoctor);
 router.get('/studies', protect, authorize('admin'), getAllStudiesForAdmin); 
-router.get('/doctors', protect, authorize('admin'), getAllDoctors); 
+router.get('/doctors', protect, authorize('admin', 'lab_staff'), getAllDoctors); 
 router.post('/studies/:studyId/assign', protect, authorize('admin'), assignDoctorToStudy); 
 
 
 // Route that allows multiple roles (admin, lab_staff, doctor_account)
-router.get('/patients/:id/detailed-view', protect, authorize('admin', 'lab_staff', 'doctor_account'), getPatientDetailedView);
+router.get('/patients/:patientId/detailed-view', protect, authorize('admin', 'lab_staff', 'doctor_account'), getPatientDetailedView);
 router.get('/doctors/:doctorId', getDoctorById); // We need to add this controller
 router.put('/doctors/:doctorId', updateDoctor);
 router.delete('/doctors/:doctorId', deleteDoctor);

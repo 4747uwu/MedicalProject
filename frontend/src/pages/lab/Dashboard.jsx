@@ -28,6 +28,7 @@ const LabDashboard = () => {
           location: selectedLocation
         }
       });
+      console.log('Fetched studies:', response.data); // Debugging log
       
       if (response.data.success) {
         setStudies(response.data.data);

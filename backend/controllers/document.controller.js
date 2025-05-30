@@ -16,92 +16,112 @@ const __dirname = path.dirname(__filename);
 
 class DocumentController {
   // Generate and download patient report (NO STORAGE)
-  static async generatePatientReport(req, res) {
+static async generatePatientReport(req, res) {
     try {
-      const { studyId } = req.params;
-      
-      // Fetch study data with populated fields based on your schema
-      const study = await DicomStudy.findById(studyId)
-        .populate({
-          path: 'lastAssignedDoctor',
-          populate: {
-            path: 'userAccount',
-            select: 'fullName'
-          }
-        })
-        .populate('sourceLab', 'name')
-        .populate('patient', 'firstName lastName patientNameRaw');
-      
-      if (!study) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Study not found' 
-        });
-      }
-
-      // Get patient name - handle different name formats
-      let patientName = 'N/A';
-      if (study.patient) {
-        if (study.patient.firstName && study.patient.lastName) {
-          patientName = `${study.patient.firstName} ${study.patient.lastName}`;
-        } else if (study.patient.patientNameRaw) {
-          // Parse DICOM name format (LastName^FirstName^^^)
-          const nameParts = study.patient.patientNameRaw.split('^');
-          const lastName = nameParts[0] || '';
-          const firstName = nameParts[1] || '';
-          patientName = `${firstName} ${lastName}`.trim() || 'N/A';
+        const { studyId } = req.params;
+        
+        // 🔧 FIXED: Use correct schema fields based on your DicomStudy model
+        const study = await DicomStudy.findById(studyId)
+            .populate({
+                path: 'assignment.assignedTo',  // Correct field from your schema
+                populate: {
+                    path: 'userAccount',
+                    select: 'fullName'
+                }
+            })
+            .populate('sourceLab', 'name')
+            .populate('patient', 'firstName lastName patientNameRaw patientID computed');
+        
+        if (!study) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Study not found' 
+            });
         }
-      }
 
-      // Prepare template data - only the requested fields
-      const templateData = {
-        PatientName: patientName,
-        DoctorName: study.lastAssignedDoctor?.userAccount?.fullName || 'Not Assigned',
-        LabName: study.sourceLab?.name || 'N/A',
-        ReportDate: new Date().toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        })
-      };
+        // 🔧 FIXED: Get patient name - handle different name formats with computed field
+        let patientName = 'N/A';
+        if (study.patient) {
+            // First try computed.fullName (if available)
+            if (study.patient.computed?.fullName) {
+                patientName = study.patient.computed.fullName;
+            }
+            // Then try firstName + lastName
+            else if (study.patient.firstName && study.patient.lastName) {
+                patientName = `${study.patient.firstName} ${study.patient.lastName}`;
+            }
+            // Finally try patientNameRaw (DICOM format)
+            else if (study.patient.patientNameRaw) {
+                // Parse DICOM name format (LastName^FirstName^^^)
+                const nameParts = study.patient.patientNameRaw.split('^');
+                const lastName = nameParts[0] || '';
+                const firstName = nameParts[1] || '';
+                patientName = `${firstName} ${lastName}`.trim() || 'N/A';
+            }
+            // Fallback to patientID
+            else if (study.patient.patientID) {
+                patientName = `Patient ${study.patient.patientID}`;
+            }
+        }
 
-      // Generate document (but don't store it)
-      const documentBuffer = await DocumentController.generateDocument('Patient Report.docx', templateData);
-      
-      // Create filename using patient name
-      const safePatientName = patientName.replace(/[^a-zA-Z0-9]/g, '_');
-      const filename = `Patient_Report_${safePatientName}_${Date.now()}.docx`;
-      
-      // UPDATE WORKFLOW STATUS with better error handling
-      try {
-        await updateWorkflowStatus({
-          studyId: studyId,
-          status: 'report_in_progress',
-          doctorId: study.lastAssignedDoctor?._id || null,
-          note: 'Report template generated for doctor',
-          user: req.user || null // Ensure user is not undefined
-        });
-      } catch (workflowError) {
-        console.warn('Workflow status update failed (continuing with document generation):', workflowError.message);
-        // Don't fail the entire request if workflow update fails
-      }
-      
-      // Set response headers for download
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      
-      // Send the document (direct download, no storage)
-      res.send(documentBuffer);
-      
+        // 🔧 FIXED: Get doctor name from correct assignment structure
+        let doctorName = 'Not Assigned';
+        if (study.assignment?.assignedTo?.userAccount?.fullName) {
+            doctorName = study.assignment.assignedTo.userAccount.fullName;
+        } else if (study.reportInfo?.reporterName) {
+            // Fallback to reporter name if available
+            doctorName = study.reportInfo.reporterName;
+        }
+
+        // Prepare template data - only the requested fields
+        const templateData = {
+            PatientName: patientName,
+            DoctorName: doctorName,
+            LabName: study.sourceLab?.name || 'N/A',
+            ReportDate: new Date().toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            })
+        };
+
+        // Generate document (but don't store it)
+        const documentBuffer = await DocumentController.generateDocument('Patient Report.docx', templateData);
+        
+        // Create filename using patient name
+        const safePatientName = patientName.replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `Patient_Report_${safePatientName}_${Date.now()}.docx`;
+        
+        // 🔧 FIXED: UPDATE WORKFLOW STATUS with correct doctor ID
+        try {
+            await updateWorkflowStatus({
+                studyId: studyId,
+                status: 'report_in_progress',
+                doctorId: study.assignment?.assignedTo?._id || null, // Use correct assignment structure
+                note: 'Report template generated for doctor',
+                user: req.user || null
+            });
+        } catch (workflowError) {
+            console.warn('Workflow status update failed (continuing with document generation):', workflowError.message);
+            // Don't fail the entire request if workflow update fails
+        }
+        
+        // Set response headers for download
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        
+        // Send the document (direct download, no storage)
+        res.send(documentBuffer);
+        
     } catch (error) {
-      console.error('Error generating patient report:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: 'Error generating report',
-        error: error.message 
-      });
+        console.error('Error generating patient report:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error generating report',
+            error: error.message 
+        });
     }
-  }
+}
 
   // Generic document generator function (unchanged)
   static async generateDocument(templateName, data) {
@@ -147,98 +167,91 @@ class DocumentController {
   // REMOVE saveDocumentToStudy method since we're not storing generated reports
 
   // Get report from study (only uploaded reports)
-  static async getStudyReport(req, res) {
-    try {
-      const { studyId, reportIndex } = req.params;
-      
-      const study = await DicomStudy.findById(studyId);
-      
-      if (!study) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Study not found' 
-        });
-      }
-
-      if (!study.uploadedReports || study.uploadedReports.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'No uploaded reports found for this study' 
-        });
-      }
-
-      const reportIdx = parseInt(reportIndex);
-      if (reportIdx >= study.uploadedReports.length || reportIdx < 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Report not found' 
-        });
-      }
-
-      const report = study.uploadedReports[reportIdx];
-      
-      // Convert base64 back to buffer
-      const documentBuffer = Buffer.from(report.data, 'base64');
-      
-      // Set response headers
-      res.setHeader('Content-Disposition', `attachment; filename="${report.filename}"`);
-      res.setHeader('Content-Type', report.contentType);
-      
-      // Send the document
-      res.send(documentBuffer);
-      
-    } catch (error) {
-      console.error('Error retrieving study report:', error);
-      res.status(500).json({ 
+static async getStudyReport(req, res) {
+  try {
+    const { studyId, reportIndex } = req.params;
+    
+    const study = await DicomStudy.findById(studyId);
+    
+    if (!study) {
+      return res.status(404).json({ 
         success: false, 
-        message: 'Error retrieving report',
-        error: error.message 
+        message: 'Study not found' 
       });
     }
-  }
 
-  // List reports for a study (only uploaded reports)
-  static async getStudyReports(req, res) {
-    try {
-      const { studyId } = req.params;
-      
-      const study = await DicomStudy.findById(studyId).select('uploadedReports workflowStatus');
-      
-      if (!study) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Study not found' 
-        });
-      }
-
-      // Return only metadata of uploaded reports, not the actual document data
-      const reportsMetadata = study.uploadedReports?.map((report, index) => ({
-        index: index,
-        filename: report.filename,
-        contentType: report.contentType,
-        size: report.size,
-        reportType: report.reportType,
-        uploadedAt: report.uploadedAt,
-        uploadedBy: report.uploadedBy,
-        reportStatus: report.reportStatus
-      })) || [];
-
-      res.json({ 
-        success: true, 
-        reports: reportsMetadata,
-        totalReports: reportsMetadata.length,
-        workflowStatus: study.workflowStatus // Include workflow status
-      });
-      
-    } catch (error) {
-      console.error('Error fetching study reports:', error);
-      res.status(500).json({ 
+    if (!study.uploadedReports || study.uploadedReports.length === 0) {
+      return res.status(404).json({ 
         success: false, 
-        message: 'Error fetching reports',
-        error: error.message 
+        message: 'No uploaded reports found for this study' 
       });
     }
+
+    const reportIdx = parseInt(reportIndex);
+    if (reportIdx >= study.uploadedReports.length || reportIdx < 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Report not found' 
+      });
+    }
+
+    const report = study.uploadedReports[reportIdx];
+    
+    // Convert base64 back to buffer
+    const documentBuffer = Buffer.from(report.data, 'base64');
+    
+    // Update workflow status based on user role
+    try {
+      const { updateWorkflowStatus } = await import('../utils/workflowStatusManger.js');
+      
+      let newStatus;
+      let statusNote;
+      
+      // Determine workflow status based on user role
+      if (req.user.role === 'doctor_account') {
+        newStatus = 'report_downloaded_radiologist';
+        statusNote = `Report "${report.filename}" downloaded by radiologist: ${req.user.fullName || req.user.email}`;
+      } else if (req.user.role === 'admin' || req.user.role === 'lab_staff') {
+        newStatus = 'final_report_downloaded';
+        statusNote = `Final report "${report.filename}" downloaded by ${req.user.role}: ${req.user.fullName || req.user.email}`;
+      } else {
+        // Fallback for other roles
+        newStatus = 'report_downloaded';
+        statusNote = `Report "${report.filename}" downloaded by ${req.user.role || 'unknown'}: ${req.user.fullName || req.user.email}`;
+      }
+      
+      await updateWorkflowStatus({
+        studyId: study._id,
+        status: newStatus,
+        note: statusNote,
+        user: req.user
+      });
+      
+      console.log(`Workflow status updated to ${newStatus} for study ${studyId} by ${req.user.role}`);
+    } catch (statusError) {
+      // Log the error but don't fail the download
+      console.error('Error updating workflow status:', statusError);
+    }
+    
+    // Set response headers
+    res.setHeader('Content-Disposition', `attachment; filename="${report.filename}"`);
+    res.setHeader('Content-Type', report.contentType);
+    
+    // Send the document
+    res.send(documentBuffer);
+    
+  } catch (error) {
+    console.error('Error retrieving study report:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error retrieving report',
+      error: error.message 
+    });
   }
+}
+
+
+ 
 
   // Delete a specific uploaded report
   static async deleteStudyReport(req, res) {
@@ -292,101 +305,212 @@ class DocumentController {
       });
     }
   }
-
-  // Upload a report document for a study (ONLY WAY TO STORE REPORTS)
-  static async uploadStudyReport(req, res) {
-    try {
+  // List reports for a study (only uploaded reports)
+// 🔧 FIXED: Upload study report function
+static async uploadStudyReport(req, res) {
+  console.log('Uploading study report...'); 
+  try {
       const { studyId } = req.params;
       const { doctorId, reportStatus } = req.body;
       
       // Check if file exists in the request
       if (!req.file) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'No file uploaded' 
-        });
+          return res.status(400).json({ 
+              success: false, 
+              message: 'No file uploaded' 
+          });
       }
       
-      const study = await DicomStudy.findById(studyId);
+      const study = await DicomStudy.findById(studyId)
+          .populate('patient', 'patientID firstName lastName')
+          .populate('assignment.assignedTo');
       
       if (!study) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Study not found' 
-        });
+          return res.status(404).json({ 
+              success: false, 
+              message: 'Study not found' 
+          });
       }
       
-      // Find doctor's details if provided
+      // 🔧 FIXED: Use assigned doctor from study if no doctorId provided
       let doctor = null;
+      let effectiveDoctorId = doctorId;
+      
       if (doctorId) {
-        doctor = await Doctor.findById(doctorId).populate('userAccount', 'fullName');
-        if (!doctor) {
-          return res.status(404).json({
-            success: false,
-            message: 'Doctor not found'
-          });
-        }
+          doctor = await Doctor.findById(doctorId).populate('userAccount', 'fullName');
+          if (!doctor) {
+              return res.status(404).json({
+                  success: false,
+                  message: 'Doctor not found'
+              });
+          }
+      } else if (study.assignment?.assignedTo) {
+          // Use the already assigned doctor
+          effectiveDoctorId = study.assignment.assignedTo;
+          doctor = await Doctor.findById(effectiveDoctorId).populate('userAccount', 'fullName');
       }
       
       // Get the file from multer
       const file = req.file;
       
-      // Create report object for UPLOADED reports
+      // 🔧 FIXED: Create report object compatible with your schema
       const reportDocument = {
-        filename: file.originalname,
-        contentType: file.mimetype,
-        data: file.buffer.toString('base64'),
-        size: file.size,
-        reportType: 'uploaded-report',
-        uploadedAt: new Date(),
-        uploadedBy: doctor ? doctor.userAccount?.fullName : (req.user ? req.user.fullName : 'Unknown'),
-        reportStatus: reportStatus || 'finalized', // Default to finalized for uploads
-        doctorId: doctorId
+          filename: file.originalname,
+          contentType: file.mimetype,
+          data: file.buffer.toString('base64'),
+          size: file.size,
+          reportType: 'uploaded-report',
+          uploadedAt: new Date(),
+          uploadedBy: doctor?.userAccount?.fullName || req.user?.fullName || 'Unknown',
+          reportStatus: reportStatus || 'finalized',
+          doctorId: effectiveDoctorId
       };
       
-      // Initialize uploadedReports array if it doesn't exist
+      // 🔧 FIXED: Initialize uploadedReports array if it doesn't exist
       if (!study.uploadedReports) {
-        study.uploadedReports = [];
+          study.uploadedReports = [];
       }
       
-      // Add to uploadedReports array (not reports array)
+      // Add to uploadedReports array
       study.uploadedReports.push(reportDocument);
+      study.ReportAvailable = true; // Ensure reportAvailable is set
+      // study.workflowStatus = 'report_finalized'; // Update workflow status
       
-      // UPDATE WORKFLOW STATUS TO 'report_finalized'
-      await updateWorkflowStatus({
-        studyId: studyId,
-        status: 'report_finalized',
-        doctorId: doctorId,
-        note: `Report uploaded by ${reportDocument.uploadedBy}`,
-        user: req.user
-      });
+      // 🔧 FIXED: Update report-related fields (add these to your schema if needed)
+      study.reportInfo = study.reportInfo || {};
+      study.reportInfo.finalizedAt = new Date();
+      study.reportInfo.reporterName = doctor?.userAccount?.fullName || req.user?.fullName || 'Unknown';
+      
+      // 🔧 FIXED: Update timing info
+      if (study.assignment?.assignedAt) {
+          const assignmentToReport = (new Date() - new Date(study.assignment.assignedAt)) / (1000 * 60);
+          study.timingInfo = study.timingInfo || {};
+          study.timingInfo.assignmentToReportMinutes = Math.round(assignmentToReport);
+      }
+      
+      // 🔧 FIXED: UPDATE WORKFLOW STATUS with proper error handling
+      try {
+          await updateWorkflowStatus({
+              studyId: studyId,
+              status: 'report_finalized',
+              doctorId: effectiveDoctorId,
+              note: `Report uploaded by ${reportDocument.uploadedBy}`,
+              user: req.user
+          });
+      } catch (workflowError) {
+          console.warn('Workflow status update failed:', workflowError.message);
+          // Continue with save even if workflow update fails
+      }
       
       await study.save();
       
       res.json({
-        success: true,
-        message: 'Report uploaded successfully',
-        report: {
-          filename: reportDocument.filename,
-          size: reportDocument.size,
-          reportType: reportDocument.reportType,
-          reportStatus: reportDocument.reportStatus,
-          uploadedBy: reportDocument.uploadedBy,
-          uploadedAt: reportDocument.uploadedAt
-        },
-        workflowStatus: 'report_finalized',
-        ReportAvailable: true
+          success: true,
+          message: 'Report uploaded successfully',
+          report: {
+              filename: reportDocument.filename,
+              size: reportDocument.size,
+              reportType: reportDocument.reportType,
+              reportStatus: reportDocument.reportStatus,
+              uploadedBy: reportDocument.uploadedBy,
+              uploadedAt: reportDocument.uploadedAt
+          },
+          workflowStatus: 'report_finalized',
+          totalReports: study.uploadedReports.length,
+          study: {
+              _id: study._id,
+              patientName: study.patientInfo?.patientName || `${study.patient?.firstName || ''} ${study.patient?.lastName || ''}`.trim(),
+              patientId: study.patientInfo?.patientID || study.patient?.patientID
+          }
       });
       
-    } catch (error) {
+  } catch (error) {
       console.error('Error uploading study report:', error);
       res.status(500).json({ 
-        success: false, 
-        message: 'Error uploading report',
-        error: error.message 
+          success: false, 
+          message: 'Error uploading report',
+          error: error.message 
       });
-    }
   }
+}
+
+// 🔧 FIXED: Get study reports function
+static async getStudyReports(req, res) {
+  console.log('Fetching study reports...');
+  try {
+      const { studyId } = req.params;
+      
+      // 🔧 FIXED: Select uploadedReports and other necessary fields
+      const study = await DicomStudy.findById(studyId)
+          .select('uploadedReports workflowStatus reportInfo assignment')
+          .populate('assignment.assignedTo', 'userAccount')
+          .populate({
+              path: 'assignment.assignedTo',
+              populate: {
+                  path: 'userAccount',
+                  select: 'fullName'
+              }
+          });
+      
+      if (!study) {
+          return res.status(404).json({ 
+              success: false, 
+              message: 'Study not found' 
+          });
+      }
+
+      // 🔧 FIXED: Return metadata with enhanced information
+      const reportsMetadata = study.uploadedReports?.map((report, index) => ({
+          index: index,
+          filename: report.filename,
+          contentType: report.contentType,
+          size: report.size,
+          reportType: report.reportType,
+          uploadedAt: report.uploadedAt,
+          uploadedBy: report.uploadedBy,
+          reportStatus: report.reportStatus,
+          // 🔧 ADDED: Additional metadata for UI
+          formattedSize: (report.size / 1024 / 1024).toFixed(2) + ' MB',
+          formattedDate: new Date(report.uploadedAt).toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+          })
+      })) || [];
+
+      // 🔧 ADDED: Additional study information for UI
+      const assignedDoctor = study.assignment?.assignedTo;
+      
+      res.json({ 
+          success: true, 
+          reports: reportsMetadata,
+          totalReports: reportsMetadata.length,
+          workflowStatus: study.workflowStatus,
+          // 🔧 ADDED: Enhanced response data
+          studyInfo: {
+              _id: study._id,
+              hasReports: reportsMetadata.length > 0,
+              latestReportDate: reportsMetadata.length > 0 ? 
+                  reportsMetadata[reportsMetadata.length - 1].uploadedAt : null,
+              assignedDoctor: assignedDoctor ? {
+                  _id: assignedDoctor._id,
+                  fullName: assignedDoctor.userAccount?.fullName || 'Unknown',
+              } : null,
+              reportInfo: study.reportInfo
+          }
+      });
+      
+  } catch (error) {
+      console.error('Error fetching study reports:', error);
+      res.status(500).json({ 
+          success: false, 
+          message: 'Error fetching reports',
+          error: error.message 
+      });
+  }
+}
 
   // Generate lab report (unchanged)
   static async generateLabReport(req, res) {

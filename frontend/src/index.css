@@ -53,6 +53,66 @@ html::-webkit-scrollbar {
     opacity: 1;
   }
 }
+/* Add these toast animation classes */
+@keyframes enter {
+  0% {
+    transform: translate3d(100%, 0, 0) scale(0.6);
+    opacity: 0;
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes leave {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate3d(100%, 0, 0) scale(0.6);
+    opacity: 0;
+  }
+}
+
+.animate-enter {
+  animation: enter 0.35s ease-out;
+}
+
+.animate-leave {
+  animation: leave 0.4s ease-in forwards;
+}
+
+/* Toast container positioning */
+.toast-container {
+  z-index: 9999;
+}
+
+/* Medical toast styling */
+.medical-toast {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  backdrop-filter: blur(8px);
+}
+
+/* Additional medical-themed utilities */
+.medical-gradient-success {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+}
+
+.medical-gradient-error {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.medical-gradient-info {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+.medical-gradient-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
 
 .animate-fade-in-up {
   animation: fadeInUp 0.6s ease-out forwards;
@@ -72,4 +132,35 @@ html::-webkit-scrollbar {
 
 .animation-delay-600 {
   animation-delay: 600ms;
+}
+
+/* Add to your CSS file or styled-components */
+.worklist-table {
+  font-size: 0.75rem;
+  /* Smaller base font size */
+}
+
+.worklist-table th,
+.worklist-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Make table responsive on smaller screens */
+@media (max-width: 1400px) {
+  .worklist-table {
+    font-size: 0.7rem;
+  }
+
+  .worklist-table th,
+  .worklist-table td {
+    padding: 0.25rem 0.5rem;
+  }
+}
+
+@media (max-width: 1200px) {
+  .worklist-table {
+    font-size: 0.65rem;
+  }
 }

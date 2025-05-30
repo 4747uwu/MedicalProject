@@ -37,6 +37,11 @@ const DoctorSchema = new mongoose.Schema({
         type: String,
         trim: true,
     },
+
+    assigned: {
+        type: Boolean,
+        default: false,
+    },
     
 
     // Add tracking arrays for assigned and completed studies

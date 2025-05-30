@@ -3,8 +3,8 @@ import axios from 'axios';
 import fs from 'fs/promises'; 
 import path from 'path';
 import mongoose from 'mongoose';
-import Queue from 'bull'; // npm install bull
-import Redis from 'ioredis'; // npm install ioredis
+import Redis from 'ioredis';
+import websocketService from '../config/webSocket.js';
 
 // Import Mongoose Models
 import DicomStudy from '../models/dicomStudyModel.js';
@@ -16,183 +16,458 @@ const router = express.Router();
 // --- Configuration ---
 const ORTHANC_BASE_URL = process.env.ORTHANC_URL || 'http://localhost:8042';
 const ORTHANC_USERNAME = process.env.ORTHANC_USERNAME || 'alice'; 
-const ORTHANC_PASSWORD = process.env.ORTHANC_PASSWORD || 'alicePads'; 
+const ORTHANC_PASSWORD = process.env.ORTHANC_PASSWORD || 'alicePassword';
 const orthancAuth = 'Basic ' + Buffer.from(ORTHANC_USERNAME + ':' + ORTHANC_PASSWORD).toString('base64');
 
-// --- Redis & Bull Queue Setup ---
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
+// --- Simple Redis Setup (without Bull queue) ---
+const REDIS_URL = 'rediss://default:ATDmAAIjcDFlY2U3MzZmZjIxNDQ0YmZmYmY0NmVlZTBhMjgwOTkyYnAxMA@just-pug-12518.upstash.io:6379';
+
+const redis = new Redis(REDIS_URL, {
   maxRetriesPerRequest: 3,
   retryDelayOnFailover: 100,
+  tls: {},
+  lazyConnect: true,
 });
 
-// Create job queue for DICOM processing
-const dicomQueue = new Queue('dicom processing', {
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-  },
-  defaultJobOptions: {
-    removeOnComplete: 50, // Keep last 50 completed jobs
-    removeOnFail: 100,    // Keep last 100 failed jobs
-    attempts: 3,          // Retry failed jobs 3 times
-    backoff: {
-      type: 'exponential',
-      delay: 2000,        // Start with 2s delay, then exponential backoff
-    },
-  },
-});
+// --- Simple In-Memory Queue ---
+class SimpleJobQueue {
+  constructor() {
+    this.jobs = new Map();
+    this.processing = new Set();
+    this.nextJobId = 1;
+    this.isProcessing = false;
+    this.concurrency = 3; // Process max 3 jobs simultaneously
+  }
 
-// --- Job Processing Logic ---
-dicomQueue.process('process-dicom-instance', 5, async (job) => {
-  const { orthancInstanceId, requestId } = job.data;
-  
-  try {
-    console.log(`[Queue Worker] 🚀 Starting job ${job.id} for instance: ${orthancInstanceId}`);
-    console.log(`[Queue Worker] 📊 Current time: ${new Date().toISOString()}`);
+  async add(jobType, data) {
+    const jobId = this.nextJobId++;
+    const job = {
+      id: jobId,
+      type: jobType,
+      data: data,
+      status: 'waiting',
+      createdAt: new Date(),
+      progress: 0,
+      result: null,
+      error: null
+    };
     
-    // Update job progress
-    await job.progress(10);
-    console.log(`[Queue Worker] ✅ Progress updated to 10%`);
+    this.jobs.set(jobId, job);
+    console.log(`📝 Job ${jobId} added to queue`);
     
-    // Fetch metadata with timeout
-    const metadataUrl = `${ORTHANC_BASE_URL}/instances/${orthancInstanceId}/simplified-tags`;
-    console.log(`[Queue Worker] 🌐 About to fetch from: ${metadataUrl}`);
-    console.log(`[Queue Worker] ⏰ Fetch started at: ${new Date().toISOString()}`);
-    
-    const metadataResponse = await axios.get(metadataUrl, { 
-      headers: { 'Authorization': orthancAuth },
-      timeout: 10000 // Reduce timeout to 10 seconds
-    });
-    
-    console.log(`[Queue Worker] ✅ Metadata fetched successfully at: ${new Date().toISOString()}`);
-    await job.progress(30);
-    
-    const instanceTags = metadataResponse.data;
-    const sopInstanceUID = instanceTags.SOPInstanceUID;
-    const seriesInstanceUID = instanceTags.SeriesInstanceUID;
-    const studyInstanceUID = instanceTags.StudyInstanceUID;
-
-    if (!studyInstanceUID) {
-      throw new Error('StudyInstanceUID is missing from instance metadata.');
+    // Start processing if not already running
+    if (!this.isProcessing) {
+      this.startProcessing();
     }
+    
+    return job;
+  }
 
-    const orthancStudyID = `DERIVED_${studyInstanceUID.replace(/\./g, '_')}`;
+  async startProcessing() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
     
-    await job.progress(50);
+    console.log('🚀 Queue processor started');
     
-    // Database operations
-    const patientRecord = await findOrCreatePatientFromTags(instanceTags);
-    const labRecord = await findOrCreateSourceLab();
+    while (this.getWaitingJobs().length > 0 || this.processing.size > 0) {
+      // Process jobs up to concurrency limit
+      while (this.processing.size < this.concurrency && this.getWaitingJobs().length > 0) {
+        const waitingJobs = this.getWaitingJobs();
+        if (waitingJobs.length > 0) {
+          const job = waitingJobs[0];
+          this.processJob(job);
+        }
+      }
+      
+      // Wait a bit before checking again
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
     
-    await job.progress(70);
+    this.isProcessing = false;
+    console.log('⏹️ Queue processor stopped');
+  }
+
+  async processJob(job) {
+    this.processing.add(job.id);
+    job.status = 'active';
     
-    // Upsert DicomStudy with session for consistency
-    const session = await mongoose.startSession();
-    let dicomStudyDoc;
+    console.log(`🚀 Job ${job.id} started processing`);
     
     try {
-      await session.withTransaction(async () => {
-        dicomStudyDoc = await DicomStudy.findOne({ studyInstanceUID: studyInstanceUID }).session(session);
+      if (job.type === 'process-dicom-instance') {
+        job.result = await this.processDicomInstance(job);
+        job.status = 'completed';
+        console.log(`✅ Job ${job.id} completed successfully`);
+      } else if (job.type === 'test-connection') {
+        job.result = { success: true, processedAt: new Date() };
+        job.status = 'completed';
+        console.log(`✅ Test job ${job.id} completed`);
+      }
+      
+    } catch (error) {
+      job.error = error.message;
+      job.status = 'failed';
+      console.error(`❌ Job ${job.id} failed:`, error.message);
+    } finally {
+      this.processing.delete(job.id);
+    }
+  }
 
-        const modalitiesInStudySet = new Set(dicomStudyDoc?.modalitiesInStudy || []);
-        if(instanceTags.Modality) modalitiesInStudySet.add(instanceTags.Modality);
+  async processDicomInstance(job) {
+    const { orthancInstanceId, requestId } = job.data;
+    const startTime = Date.now();
+    
+    try {
+      console.log(`[Queue Worker] 🚀 Starting job ${job.id} for instance: ${orthancInstanceId}`);
+      
+      job.progress = 10;
+      
+      // Add timeout for Orthanc request
+      const metadataUrl = `${ORTHANC_BASE_URL}/instances/${orthancInstanceId}/simplified-tags`;
+      console.log(`[Queue Worker] 🌐 Fetching from: ${metadataUrl}`);
+      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Orthanc request timeout after 8 seconds')), 8000);
+      });
+      
+      const fetchPromise = axios.get(metadataUrl, { 
+        headers: { 'Authorization': orthancAuth },
+        timeout: 7000
+      });
+      
+      const metadataResponse = await Promise.race([fetchPromise, timeoutPromise]);
+      
+      const elapsedTime = Date.now() - startTime;
+      console.log(`[Queue Worker] ✅ Metadata fetched in ${elapsedTime}ms`);
+      
+      job.progress = 30;
+      
+      const instanceTags = metadataResponse.data;
+      const sopInstanceUID = instanceTags.SOPInstanceUID;
+      const studyInstanceUID = instanceTags.StudyInstanceUID;
 
-        if (dicomStudyDoc) {
-          console.log(`[Queue Worker] Updating existing study: ${studyInstanceUID}`);
-          
-          if (!dicomStudyDoc.orthancStudyID) {
-            dicomStudyDoc.orthancStudyID = orthancStudyID;
-          }
-          
-          dicomStudyDoc.patient = patientRecord._id;
-          dicomStudyDoc.sourceLab = labRecord._id;
-          dicomStudyDoc.modalitiesInStudy = Array.from(modalitiesInStudySet);
-          dicomStudyDoc.accessionNumber = dicomStudyDoc.accessionNumber || instanceTags.AccessionNumber;
-          dicomStudyDoc.studyDate = dicomStudyDoc.studyDate || instanceTags.StudyDate;
-          dicomStudyDoc.studyTime = dicomStudyDoc.studyTime || instanceTags.StudyTime;
-          dicomStudyDoc.examDescription = dicomStudyDoc.examDescription || instanceTags.StudyDescription;
-          
-          if (dicomStudyDoc.workflowStatus === 'no_active_study') {
-            dicomStudyDoc.workflowStatus = 'new_study_received';
-          }
-          
-          dicomStudyDoc.statusHistory.push({
-            status: 'new_study_received',
-            changedAt: new Date(),
-            note: `Instance ${sopInstanceUID} processed asynchronously (Job ${job.id}).`
-          });
-        } else {
-          console.log(`[Queue Worker] Creating new study: ${studyInstanceUID}`);
-          
-          dicomStudyDoc = new DicomStudy({
-            orthancStudyID: orthancStudyID,
-            studyInstanceUID: studyInstanceUID,
-            accessionNumber: instanceTags.AccessionNumber || '',
-            patient: patientRecord._id,
-            sourceLab: labRecord._id,
-            studyDate: instanceTags.StudyDate || '',
-            studyTime: instanceTags.StudyTime || '',
-            modalitiesInStudy: Array.from(modalitiesInStudySet),
-            examDescription: instanceTags.StudyDescription || '',
-            workflowStatus: 'new_study_received',
-            statusHistory: [{
-              status: 'new_study_received',
-              changedAt: new Date(),
-              note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}).`
-            }],
-          });
+      if (!studyInstanceUID) {
+        throw new Error('StudyInstanceUID is missing from instance metadata.');
+      }
+
+      // 🔧 FIX: Get the real Orthanc Study ID instead of creating a fake one
+      const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
+      
+      if (!orthancStudyID) {
+        console.warn(`Study ${studyInstanceUID} not found in Orthanc, saving without Orthanc Study ID`);
+      }
+      
+      job.progress = 50;
+      
+      // Database operations
+      const patientRecord = await findOrCreatePatientFromTags(instanceTags);
+      const labRecord = await findOrCreateSourceLab();
+      
+      job.progress = 70;
+      
+      // Simplified database update (without transactions for now)
+      let dicomStudyDoc = await DicomStudy.findOne({ studyInstanceUID: studyInstanceUID });
+
+      const modalitiesInStudySet = new Set(dicomStudyDoc?.modalitiesInStudy || []);
+      if(instanceTags.Modality) modalitiesInStudySet.add(instanceTags.Modality);
+
+      if (dicomStudyDoc) {
+        console.log(`[Queue Worker] Updating existing study: ${studyInstanceUID}`);
+        
+        // Only update if we have a real Orthanc Study ID and it's not already set
+        if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
+          dicomStudyDoc.orthancStudyID = orthancStudyID;
         }
         
-        await dicomStudyDoc.save({ session });
-      });
-    } finally {
-      await session.endSession();
-    }
-    
-    await job.progress(100);
-    
-    // Store job result in Redis for retrieval
-    const result = {
-      success: true,
-      orthancInstanceId: orthancInstanceId,
-      studyDatabaseId: dicomStudyDoc._id,
-      patientId: patientRecord._id,
-      sopInstanceUID: sopInstanceUID,
-      studyInstanceUID: studyInstanceUID,
-      processedAt: new Date(),
-      metadataSummary: {
+        dicomStudyDoc.patient = patientRecord._id;
+        dicomStudyDoc.sourceLab = labRecord._id;
+        dicomStudyDoc.modalitiesInStudy = Array.from(modalitiesInStudySet);
+        dicomStudyDoc.accessionNumber = dicomStudyDoc.accessionNumber || instanceTags.AccessionNumber;
+        dicomStudyDoc.studyDate = dicomStudyDoc.studyDate || instanceTags.StudyDate;
+        dicomStudyDoc.studyTime = dicomStudyDoc.studyTime || instanceTags.StudyTime;
+        dicomStudyDoc.examDescription = dicomStudyDoc.examDescription || instanceTags.StudyDescription;
+        
+        if (dicomStudyDoc.workflowStatus === 'no_active_study') {
+          dicomStudyDoc.workflowStatus = 'new_study_received';
+        }
+        
+        dicomStudyDoc.statusHistory.push({
+          status: 'new_study_received',
+          changedAt: new Date(),
+          note: `Instance ${sopInstanceUID} processed asynchronously (Job ${job.id}).`
+        });
+      } else {
+        console.log(`[Queue Worker] Creating new study: ${studyInstanceUID}`);
+        
+        dicomStudyDoc = new DicomStudy({
+          orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
+          studyInstanceUID: studyInstanceUID,
+          accessionNumber: instanceTags.AccessionNumber || '',
+          patient: patientRecord._id,
+          sourceLab: labRecord._id,
+          studyDate: instanceTags.StudyDate || '',
+          studyTime: instanceTags.StudyTime || '',
+          modalitiesInStudy: Array.from(modalitiesInStudySet),
+          examDescription: instanceTags.StudyDescription || '',
+          workflowStatus: 'new_study_received',
+          statusHistory: [{
+            status: 'new_study_received',
+            changedAt: new Date(),
+            note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}).`
+          }],
+        });
+      }
+      
+      await dicomStudyDoc.save();
+      
+      // 🔥 NEW: Send WebSocket notification to admins
+      const studyNotificationData = {
+        _id: dicomStudyDoc._id,
         patientName: patientRecord.patientNameRaw,
         patientId: patientRecord.patientID,
         modality: instanceTags.Modality || 'Unknown',
-        studyDate: instanceTags.StudyDate || 'Unknown'
-      }
-    };
+        location: labRecord.name,
+        studyDate: instanceTags.StudyDate,
+        workflowStatus: dicomStudyDoc.workflowStatus,
+        priority: dicomStudyDoc.caseType || 'routine',
+        accessionNumber: dicomStudyDoc.accessionNumber
+      };
+
+      // Notify admins about new study
+      websocketService.notifyNewStudy(studyNotificationData);
+      
+      job.progress = 100;
+      
+      // Store result in Redis
+      const result = {
+        success: true,
+        orthancInstanceId: orthancInstanceId,
+        studyDatabaseId: dicomStudyDoc._id,
+        patientId: patientRecord._id,
+        sopInstanceUID: sopInstanceUID,
+        studyInstanceUID: studyInstanceUID,
+        processedAt: new Date(),
+        elapsedTime: Date.now() - startTime,
+        metadataSummary: {
+          patientName: patientRecord.patientNameRaw,
+          patientId: patientRecord.patientID,
+          modality: instanceTags.Modality || 'Unknown',
+          studyDate: instanceTags.StudyDate || 'Unknown'
+        }
+      };
+      
+      // Store result for 1 hour
+      await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(result));
+      
+      console.log(`[Queue Worker] Successfully processed job ${job.id} for study: ${studyInstanceUID}`);
+      return result;
+      
+    } catch (error) {
+      const elapsedTime = Date.now() - startTime;
+      console.error(`[Queue Worker] ❌ Job ${job.id} failed after ${elapsedTime}ms:`, error.message);
+      
+      const errorResult = {
+        success: false,
+        error: error.message,
+        elapsedTime: elapsedTime,
+        orthancInstanceId: orthancInstanceId,
+        failedAt: new Date()
+      };
+      
+      await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
+      throw error;
+    }
+  }
+
+  getWaitingJobs() {
+    return Array.from(this.jobs.values()).filter(job => job.status === 'waiting');
+  }
+
+  getJob(jobId) {
+    return this.jobs.get(jobId);
+  }
+
+  getJobByRequestId(requestId) {
+    return Array.from(this.jobs.values()).find(job => job.data.requestId === requestId);
+  }
+}
+
+// Create the simple queue instance
+const jobQueue = new SimpleJobQueue();
+
+// Redis connection listeners
+redis.on('connect', () => {
+  console.log('✅ Redis connected successfully to Upstash');
+});
+
+redis.on('ready', () => {
+  console.log('✅ Redis is ready for operations');
+});
+
+redis.on('error', (error) => {
+  console.error('❌ Redis connection error:', error.message);
+});
+
+// Test Redis connection
+console.log('🧪 Testing Redis connection...');
+redis.ping()
+  .then(() => {
+    console.log('✅ Redis ping successful - connection working');
+    return redis.set('startup-test', 'hello-world');
+  })
+  .then(() => {
+    console.log('✅ Redis write test successful');
+    return redis.get('startup-test');
+  })
+  .then((value) => {
+    console.log('✅ Redis read test successful, value:', value);
+    return redis.del('startup-test');
+  })
+  .then(() => {
+    console.log('✅ All Redis tests passed');
+  })
+  .catch(error => {
+    console.error('❌ Redis test failed:', error.message);
+  });
+
+// --- Routes ---
+router.get('/test-connection', async (req, res) => {
+  try {
+    // Test Redis
+    await redis.set('test-key', `test-${Date.now()}`);
+    const redisResult = await redis.get('test-key');
+    await redis.del('test-key');
     
-    // Store result for 1 hour
-    await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(result));
+    // Test queue
+    const testJob = await jobQueue.add('test-connection', {
+      message: 'connection test',
+      timestamp: new Date()
+    });
     
-    console.log(`[Queue Worker] Successfully processed job ${job.id} for study: ${studyInstanceUID}`);
-    return result;
+    res.json({
+      redis: 'working',
+      redisValue: redisResult,
+      queue: 'working', 
+      testJobId: testJob.id,
+      timestamp: new Date().toISOString()
+    });
     
   } catch (error) {
-    console.error(`[Queue Worker] ❌ Job ${job.id} failed at: ${new Date().toISOString()}`, error.message);
-    
-    // Store error result immediately
-    const errorResult = {
-      success: false,
-      error: error.message,
-      orthancInstanceId: orthancInstanceId,
-      failedAt: new Date()
-    };
-    
-    await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
-    throw error;
+    console.error('Connection test failed:', error);
+    res.status(500).json({
+      error: error.message
+    });
   }
 });
 
-// --- Your existing helper functions remain the same ---
+// --- ASYNC ROUTE ---
+router.post('/new-dicom', async (req, res) => {
+  const routeName = '/new-dicom';
+  console.log(`[NodeApp ${routeName}] Received async request. Body:`, req.body);
+
+  let receivedOrthancInstanceId = null;
+
+  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+    if (req.body.ID) {
+        receivedOrthancInstanceId = req.body.ID;
+    } else if (req.body.instanceId) {
+        receivedOrthancInstanceId = req.body.instanceId;
+    } else {
+        const keys = Object.keys(req.body);
+        if (keys.length > 0) {
+            receivedOrthancInstanceId = keys[0];
+        }
+    }
+  }
+
+  if (!receivedOrthancInstanceId || typeof receivedOrthancInstanceId !== 'string' || receivedOrthancInstanceId.trim() === '') {
+    return res.status(400).json({ 
+      error: 'Invalid or empty Orthanc Instance ID',
+      receivedBody: req.body 
+    });
+  }
+
+  const orthancInstanceId = receivedOrthancInstanceId.trim();
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  
+  try {
+    // Add job to simple queue
+    const job = await jobQueue.add('process-dicom-instance', {
+      orthancInstanceId: orthancInstanceId,
+      requestId: requestId,
+      submittedAt: new Date()
+    });
+
+    console.log(`[NodeApp ${routeName}] ✅ Job ${job.id} queued for instance: ${orthancInstanceId}`);
+
+    // Immediate response
+    res.status(202).json({
+      message: 'DICOM instance queued for asynchronous processing',
+      jobId: job.id,
+      requestId: requestId,
+      orthancInstanceId: orthancInstanceId,
+      status: 'queued',
+      estimatedProcessingTime: '5-30 seconds',
+      checkStatusUrl: `/orthanc/job-status/${requestId}`
+    });
+
+  } catch (error) {
+    console.error(`[NodeApp ${routeName}] ❌ Error queuing job:`, error);
+    res.status(500).json({
+      message: 'Error queuing DICOM instance for processing',
+      error: error.message,
+      orthancInstanceId: orthancInstanceId
+    });
+  }
+});
+
+// --- Job Status Route ---
+router.get('/job-status/:requestId', async (req, res) => {
+  const { requestId } = req.params;
+  
+  try {
+    // Check Redis first
+    const resultData = await redis.get(`job:result:${requestId}`);
+    
+    if (resultData) {
+      const result = JSON.parse(resultData);
+      res.json({
+        status: result.success ? 'completed' : 'failed',
+        result: result,
+        requestId: requestId
+      });
+    } else {
+      // Check in-memory queue
+      const job = jobQueue.getJobByRequestId(requestId);
+      
+      if (job) {
+        res.json({
+          status: job.status,
+          progress: job.progress,
+          requestId: requestId,
+          jobId: job.id,
+          createdAt: job.createdAt,
+          error: job.error
+        });
+      } else {
+        res.status(404).json({
+          status: 'not_found',
+          message: 'Job not found or expired',
+          requestId: requestId
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error checking job status:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error checking job status',
+      error: error.message
+    });
+  }
+});
+
+// --- Keep all your existing helper functions ---
 async function findOrCreatePatientFromTags(instanceTags) {
   const patientIdDicom = instanceTags.PatientID;
   const patientNameDicomObj = instanceTags.PatientName;
@@ -265,192 +540,32 @@ async function findOrCreateSourceLab() {
   return lab;
 }
 
-// --- ASYNC ROUTE - Immediate Response ---
-router.post('/new-dicom', async (req, res) => {
-  const routeName = '/new-dicom';
-  console.log(`[NodeApp ${routeName}] Received async request. Body:`, req.body);
-
-  let receivedOrthancInstanceId = null;
-
-  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-    if (req.body.ID) {
-        receivedOrthancInstanceId = req.body.ID;
-    } else if (req.body.instanceId) {
-        receivedOrthancInstanceId = req.body.instanceId;
-    } else {
-        const keys = Object.keys(req.body);
-        if (keys.length > 0) {
-            receivedOrthancInstanceId = keys[0];
-        }
-    }
-  }
-
-  if (!receivedOrthancInstanceId || typeof receivedOrthancInstanceId !== 'string' || receivedOrthancInstanceId.trim() === '') {
-    return res.status(400).json({ 
-      error: 'Invalid or empty Orthanc Instance ID',
-      receivedBody: req.body 
-    });
-  }
-
-  const orthancInstanceId = receivedOrthancInstanceId.trim();
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  
+// Replace line 152 and the surrounding logic with this:
+async function getOrthancStudyId(studyInstanceUID) {
   try {
-    // **IMMEDIATELY add job to queue and return response**
-    const job = await dicomQueue.add('process-dicom-instance', {
-      orthancInstanceId: orthancInstanceId,
-      requestId: requestId,
-      submittedAt: new Date()
+    // Search for the study by Study Instance UID to get the real Orthanc Study ID
+    const searchResponse = await axios.post(`${ORTHANC_BASE_URL}/tools/find`, {
+      Level: 'Study',
+      Query: {
+        StudyInstanceUID: studyInstanceUID
+      }
     }, {
-      priority: 1, // Higher priority for newer requests
-      delay: 0     // Process immediately
+      headers: { 'Authorization': orthancAuth }
     });
-
-    console.log(`[NodeApp ${routeName}] ✅ Job ${job.id} queued for instance: ${orthancInstanceId}`);
-
-    // **IMMEDIATE RESPONSE** - Don't wait for processing
-    res.status(202).json({ // 202 = Accepted
-      message: 'DICOM instance queued for asynchronous processing',
-      jobId: job.id,
-      requestId: requestId,
-      orthancInstanceId: orthancInstanceId,
-      status: 'queued',
-      estimatedProcessingTime: '5-30 seconds',
-      checkStatusUrl: `/orthanc/job-status/${requestId}`,
-      queueInfo: {
-        waiting: await dicomQueue.waiting(),
-        active: await dicomQueue.active(),
-        completed: await dicomQueue.completed(),
-        failed: await dicomQueue.failed()
-      }
-    });
-
-  } catch (error) {
-    console.error(`[NodeApp ${routeName}] ❌ Error queuing job:`, error);
-    res.status(500).json({
-      message: 'Error queuing DICOM instance for processing',
-      error: error.message,
-      orthancInstanceId: orthancInstanceId
-    });
-  }
-});
-
-// --- Job Status Check Route ---
-router.get('/job-status/:requestId', async (req, res) => {
-  const { requestId } = req.params;
-  
-  try {
-    // Check if result is available
-    const resultData = await redis.get(`job:result:${requestId}`);
     
-    if (resultData) {
-      const result = JSON.parse(resultData);
-      res.json({
-        status: result.success ? 'completed' : 'failed',
-        result: result,
-        requestId: requestId
-      });
+    const studyIds = searchResponse.data;
+    if (studyIds.length > 0) {
+      // Return the actual Orthanc Study ID (UUID)
+      return studyIds[0];
     } else {
-      // Check if job is still in queue
-      const jobs = await dicomQueue.getJobs(['waiting', 'active'], 0, -1);
-      const activeJob = jobs.find(job => job.data.requestId === requestId);
-      
-      if (activeJob) {
-        const progress = await activeJob.progress();
-        res.json({
-          status: activeJob.opts.jobId ? 'active' : 'waiting',
-          progress: progress,
-          requestId: requestId,
-          jobId: activeJob.id
-        });
-      } else {
-        res.status(404).json({
-          status: 'not_found',
-          message: 'Job not found or expired',
-          requestId: requestId
-        });
-      }
+      // If study doesn't exist in Orthanc yet, return null
+      // The study might be uploaded later
+      return null;
     }
   } catch (error) {
-    console.error('Error checking job status:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Error checking job status',
-      error: error.message
-    });
+    console.error('Error searching for study in Orthanc:', error.message);
+    return null;
   }
-});
-
-// --- Batch Processing Route ---
-router.post('/new-dicom-batch', async (req, res) => {
-  const { instances } = req.body;
-  
-  if (!Array.isArray(instances) || instances.length === 0) {
-    return res.status(400).json({ error: 'Expected non-empty instances array' });
-  }
-
-  const batchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const jobs = [];
-
-  try {
-    for (const instanceId of instances) {
-      const requestId = `${batchId}_${instanceId}`;
-      
-      const job = await dicomQueue.add('process-dicom-instance', {
-        orthancInstanceId: instanceId,
-        requestId: requestId,
-        batchId: batchId,
-        submittedAt: new Date()
-      });
-      
-      jobs.push({
-        jobId: job.id,
-        requestId: requestId,
-        instanceId: instanceId
-      });
-    }
-
-    res.status(202).json({
-      message: `Batch of ${instances.length} instances queued for processing`,
-      batchId: batchId,
-      jobs: jobs,
-      checkBatchStatusUrl: `/orthanc/batch-status/${batchId}`
-    });
-
-  } catch (error) {
-    console.error('Error queuing batch:', error);
-    res.status(500).json({
-      message: 'Error queuing batch for processing',
-      error: error.message
-    });
-  }
-});
-
-// --- Queue Monitoring Routes ---
-router.get('/queue-status', async (req, res) => {
-  try {
-    const [waiting, active, completed, failed, delayed] = await Promise.all([
-      dicomQueue.waiting(),
-      dicomQueue.active(),
-      dicomQueue.completed(),
-      dicomQueue.failed(),
-      dicomQueue.delayed()
-    ]);
-
-    res.json({
-      queue: 'dicom-processing',
-      counts: {
-        waiting: waiting.length,
-        active: active.length,
-        completed: completed.length,
-        failed: failed.length,
-        delayed: delayed.length
-      },
-      health: waiting.length < 100 ? 'healthy' : 'overloaded'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Error fetching queue status' });
-  }
-});
+}
 
 export default router;

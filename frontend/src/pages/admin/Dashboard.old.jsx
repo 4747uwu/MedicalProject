@@ -1,209 +1,124 @@
-import React, { useState, useEffect } from 'react';
-import { useAuth } from '../../hooks/useAuth';
-import api from '../../services/api';
-import AdminNavbar from '../../components/layout/AdminNavbar';
-import WorklistTable from '../../components/admin/WorklistTable';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import UniversalNavbar from '../../components/layout/AdminNavbar';
+import WorklistSearch from '../../components/admin/WorklistSearch';
+import api from '../../services/api';
 
 const AdminDashboard = () => {
-  const { currentUser } = useAuth();
-  const [users, setUsers] = useState([]);
-  const [labs, setLabs] = useState([]);
-  const [studies, setStudies] = useState([]);
-  const [summaryStats, setSummaryStats] = useState({
-    totalStudies: 0,
-    pendingStudies: 0,
-    completedStudies: 0,
-    activeUsers: 0
-  });
+  const [allStudies, setAllStudies] = useState([]); // Raw data from API
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const intervalRef = useRef(null); // To store interval reference for cleanup
 
+  // Fetch all studies without any filters - let WorklistSearch handle filtering
+  const fetchStudies = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get('/admin/studies', {
+        params: {
+          page: currentPage,
+          limit: 50, // Fetch more records to allow client-side filtering
+        }
+      });
+      console.log('Fetched studies:', response.data); // Debugging log
+      
+      if (response.data.success) {
+        setAllStudies(response.data.data);
+        setTotalPages(response.data.totalPages);
+        setTotalRecords(response.data.totalRecords);
+      }
+    } catch (error) {
+      console.error('Error fetching studies:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial fetch when component mounts or page changes
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch all required data in parallel
-        const [usersRes, labsRes, studiesRes, statsRes] = await Promise.all([
-          api.get('/admin/users'),
-          api.get('/admin/labs'),
-          api.get('/admin/studies', { params: { limit: 10 } }), // Limited for preview
-          api.get('/admin/statistics')
-        ]);
-        
-        setUsers(usersRes.data.users || []);
-        setLabs(labsRes.data.labs || []);
-        setStudies(studiesRes.data.data || []);
-        
-        // Set summary statistics
-        setSummaryStats({
-          totalStudies: statsRes.data.totalStudies || 0,
-          pendingStudies: statsRes.data.pendingStudies || 0,
-          completedStudies: statsRes.data.completedStudies || 0,
-          activeUsers: statsRes.data.activeUsers || 0
-        });
-      } catch (error) {
-        console.error("Error fetching admin data:", error);
-      } finally {
-        setLoading(false);
+    fetchStudies();
+  }, [currentPage]);
+
+  // Set up auto-refresh every 10 minutes
+  useEffect(() => {
+    // Set interval to call fetchStudies every 10 minutes (600,000 milliseconds)
+    intervalRef.current = setInterval(() => {
+      console.log('Auto-refreshing studies data...');
+      fetchStudies();
+    }, 10 * 60 * 1000); // 10 minutes
+
+    // Cleanup function to clear interval when component unmounts
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        console.log('Auto-refresh interval cleared');
       }
     };
+  }, [currentPage]); // Re-setup interval when currentPage changes
 
-    fetchData();
-  }, []);
+  const handlePageChange = (page) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  };
+
+  const handleAssignmentComplete = () => {
+    fetchStudies(); // Refresh data after assignment
+  };
+
+  // Manual refresh function
+  const handleManualRefresh = () => {
+    console.log('Manual refresh triggered');
+    fetchStudies();
+  };
 
   return (
     <div className="min-h-screen bg-gray-100">
-      <AdminNavbar />
+      <UniversalNavbar />
 
-      <div className="container mx-auto p-4 pt-6">
-        {/* Dashboard Header */}
-        <div className="mb-6 flex flex-wrap justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-800">Admin Dashboard</h1>
-            <p className="text-gray-600">Welcome back, {currentUser?.fullName}</p>
-          </div>
-          
+      <div className="container w-full max-w-full mx-auto p-4 pl-6 pr-6 pt-6">
+        <div className="mb-6 flex flex-wrap justify-between items-center max-w-8xl">
           <div className="flex space-x-2 mt-4 sm:mt-0">
-            <Link to="/admin/new-study" className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 shadow-sm flex items-center">
+            <Link to="/admin/new-lab" className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 shadow-sm flex items-center">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
               </svg>
-              New Study
+              Add Lab
             </Link>
-            <Link to="/admin/new-user" className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 shadow-sm flex items-center">
+            <Link to="/admin/new-doctor" className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 shadow-sm flex items-center">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
               </svg>
-              Add User
+              Add Doctor
             </Link>
-          </div>
-        </div>
-
-        {/* Statistics Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white shadow-md rounded-lg p-4 border-l-4 border-blue-500">
-            <div className="text-sm font-medium text-gray-500">Total Studies</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-800">{summaryStats.totalStudies}</div>
-            <div className="mt-1 text-xs text-blue-500">View all</div>
-          </div>
-          
-          <div className="bg-white shadow-md rounded-lg p-4 border-l-4 border-yellow-500">
-            <div className="text-sm font-medium text-gray-500">Pending Studies</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-800">{summaryStats.pendingStudies}</div>
-            <div className="mt-1 text-xs text-yellow-500">Needs attention</div>
-          </div>
-          
-          <div className="bg-white shadow-md rounded-lg p-4 border-l-4 border-green-500">
-            <div className="text-sm font-medium text-gray-500">Completed Reports</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-800">{summaryStats.completedStudies}</div>
-            <div className="mt-1 text-xs text-green-500">All finished</div>
-          </div>
-          
-          <div className="bg-white shadow-md rounded-lg p-4 border-l-4 border-purple-500">
-            <div className="text-sm font-medium text-gray-500">Active Users</div>
-            <div className="mt-1 text-2xl font-semibold text-gray-800">{summaryStats.activeUsers}</div>
-            <div className="mt-1 text-xs text-purple-500">System users</div>
+            <button 
+              onClick={handleManualRefresh}
+              className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 shadow-sm flex items-center"
+              disabled={loading}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0V9a8 8 0 1115.356 2M15 15v-2a8 8 0 01-15.356-2" />
+              </svg>
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
         </div>
 
         {/* Reports Section - Main Focus */}
         <div className="mb-8">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold text-gray-800">Recent Reports</h2>
-            <Link to="/admin/reports" className="text-blue-500 hover:text-blue-700 text-sm font-medium">
-              View All Reports →
-            </Link>
-          </div>
-          
-          <WorklistTable limit={5} hideFilters={true} />
-        </div>
-
-        {/* System Information Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Users Card */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">System Users</h2>
-              <Link to="/admin/users" className="text-sm text-blue-500 hover:text-blue-700">
-                Manage Users
-              </Link>
-            </div>
-            
-            {loading ? (
-              <div className="flex justify-center items-center h-40">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full bg-white">
-                  <thead>
-                    <tr>
-                      <th className="py-2 px-4 border-b">Name</th>
-                      <th className="py-2 px-4 border-b">Email</th>
-                      <th className="py-2 px-4 border-b">Role</th>
-                      <th className="py-2 px-4 border-b">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.slice(0, 5).map((user) => (
-                      <tr key={user._id} className="hover:bg-gray-50">
-                        <td className="py-2 px-4 border-b">{user.fullName}</td>
-                        <td className="py-2 px-4 border-b">{user.email}</td>
-                        <td className="py-2 px-4 border-b">{user.role}</td>
-                        <td className="py-2 px-4 border-b">
-                          <span className={`px-2 py-1 rounded text-xs ${user.isActive ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                            {user.isActive ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Labs Card */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">Registered Labs</h2>
-              <Link to="/admin/labs" className="text-sm text-blue-500 hover:text-blue-700">
-                Manage Labs
-              </Link>
-            </div>
-            
-            {loading ? (
-              <div className="flex justify-center items-center h-40">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full bg-white">
-                  <thead>
-                    <tr>
-                      <th className="py-2 px-4 border-b">Name</th>
-                      <th className="py-2 px-4 border-b">Identifier</th>
-                      <th className="py-2 px-4 border-b">Contact Person</th>
-                      <th className="py-2 px-4 border-b">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {labs.slice(0, 5).map((lab) => (
-                      <tr key={lab._id} className="hover:bg-gray-50">
-                        <td className="py-2 px-4 border-b">{lab.name}</td>
-                        <td className="py-2 px-4 border-b">{lab.identifier}</td>
-                        <td className="py-2 px-4 border-b">{lab.contactPerson}</td>
-                        <td className="py-2 px-4 border-b">
-                          <span className={`px-2 py-1 rounded text-xs ${lab.isActive ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}`}>
-                            {lab.isActive ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          {/* Pass raw data to WorklistSearch - it will handle filtering and display */}
+          <WorklistSearch 
+            allStudies={allStudies}
+            loading={loading}
+            totalRecords={totalRecords}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={handlePageChange}
+            userRole="admin"
+            onAssignmentComplete={handleAssignmentComplete}
+          />
         </div>
       </div>
     </div>
