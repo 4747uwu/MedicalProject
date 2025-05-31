@@ -40,7 +40,7 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
     { key: 'uploadDate', label: 'Upload Date' },
     { key: 'reportedDate', label: 'Reported Date' },
     { key: 'reportedBy', label: 'Reported By' },
-    { key: 'accession', label: 'Accession' },
+    { key: 'accession', label: 'Accession', defaultVisible: false },
     { key: 'seenBy', label: 'Seen By' },
     { key: 'actions', label: 'Actions' },
     { key: 'report', label: 'Report' },

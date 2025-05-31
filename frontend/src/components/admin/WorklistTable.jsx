@@ -115,17 +115,26 @@ const StatusDot = React.memo(({ status, priority }) => {
 });
 
 // Eye icon with the viewer functionality
+// Update the EyeIconOHIFButton component:
+
 const EyeIconOHIFButton = React.memo(({ studyInstanceUID }) => {
   const handleClick = useCallback((e) => {
     e.preventDefault();
-    const proxyBaseURL = import.meta.env.VITE_PROXY_BASE_URL || 'https://57e2-59-145-191-142.ngrok-free.app';
-    const ohifViewerBaseURL = import.meta.env.VITE_OHIF_VIEWER_URL || 'https://viewer.ohif.org/viewer';
-    const viewerURL = `${ohifViewerBaseURL}?studyInstanceUIDs=${studyInstanceUID}&server=${encodeURIComponent(`${proxyBaseURL}/dicom-web`)}`;
+    
+    // Use Orthanc Stone Web Viewer URL format
+    const orthancBaseURL = import.meta.env.VITE_ORTHANC_URL || 'http://localhost:8042';
+    const viewerURL = `${orthancBaseURL}/stone-webviewer/index.html?study=${studyInstanceUID}`;
+    
+    console.log('Opening Stone Web Viewer with URL:', viewerURL);
     window.open(viewerURL, '_blank');
   }, [studyInstanceUID]);
 
   return (
-    <button onClick={handleClick} className="text-blue-600 hover:text-blue-800 transition-colors duration-200 p-1 hover:bg-blue-50 rounded">
+    <button 
+      onClick={handleClick} 
+      className="text-blue-600 hover:text-blue-800 transition-colors duration-200 p-1 hover:bg-blue-50 rounded"
+      title={`View study in Stone Web Viewer: ${studyInstanceUID}`}
+    >
       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />

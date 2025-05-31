@@ -43,7 +43,7 @@ const UniversalNavbar = () => {
           links: [
             { to: '/admin/dashboard', label: 'Dashboard', icon: 'dashboard', exact: true },
             { to: '/admin/doctors', label: 'Doctors', icon: 'doctors' },
-            { to: '/admin/labs', label: 'Labs', icon: 'labs' },
+            // { to: '/admin/labs', label: 'Labs', icon: 'labs' },
             { to: '/reports/tat', label: 'TAT Reports', icon: 'reports' },
           ]
         };
@@ -57,9 +57,9 @@ const UniversalNavbar = () => {
           activeColor: 'text-emerald-600 bg-emerald-50',
           links: [
             { to: '/doctor', label: 'Dashboard', icon: 'dashboard', exact: true },
-            { to: '/doctor/assigned-studies', label: 'My Studies', icon: 'studies' },
-            { to: '/doctor/reports', label: 'My Reports', icon: 'reports' },
-            { to: '/doctor/profile', label: 'Profile', icon: 'profile' }
+            // { to: '/doctor/assigned-studies', label: 'My Studies', icon: 'studies' },
+            // { to: '/doctor/reports', label: 'My Reports', icon: 'reports' },
+            // { to: '/doctor/profile', label: 'Profile', icon: 'profile' }
           ]
         };
       case 'lab_staff':
@@ -72,9 +72,9 @@ const UniversalNavbar = () => {
           activeColor: 'text-orange-600 bg-orange-50',
           links: [
             { to: '/lab', label: 'Dashboard', icon: 'dashboard', exact: true },
-            { to: '/lab/studies', label: 'Studies', icon: 'studies' },
-            { to: '/lab/upload', label: 'Upload', icon: 'upload' },
-            { to: '/lab/patients', label: 'Patients', icon: 'patients' }
+            // { to: '/lab/studies', label: 'Studies', icon: 'studies' },
+            // { to: '/lab/upload', label: 'Upload', icon: 'upload' },
+            // { to: '/lab/patients', label: 'Patients', icon: 'patients' }
           ]
         };
       default:

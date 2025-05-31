@@ -98,6 +98,17 @@ const DicomStudySchema = new mongoose.Schema({
             index: true
         }
     },
+
+    // 🆕 ADD THIS FIELD - Legacy field for backward compatibility
+    lastAssignedDoctor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Doctor',
+        index: true
+    },
+    lastAssignmentAt: {
+        type: Date,
+        index: true
+    },
     
     // 🔧 OPTIMIZED: Status history with size limit
     statusHistory: [{
@@ -162,7 +173,47 @@ const DicomStudySchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Doctor'
         }
-    }]
+    }],
+    
+    // 🆕 NEW: Series and Instance tracking
+    seriesCount: {
+        type: Number,
+        default: 0,
+        index: true
+    },
+    instanceCount: {
+        type: Number,
+        default: 0,
+        index: true
+    },
+    seriesImages: {
+        type: String, // Format: "3/45" (3 series, 45 instances)
+        default: "0/0"
+    },
+    
+    // Missing fields used in orthanc.routes.js:
+    studyTime: { type: String },
+    modalitiesInStudy: [{ type: String }],
+    examDescription: { type: String },
+    institutionName: { type: String },
+    orthancStudyID: { type: String, index: true },
+    
+    // DICOM files storage
+    dicomFiles: [{
+        sopInstanceUID: String,
+        seriesInstanceUID: String,
+        orthancInstanceId: String,
+        modality: String,
+        storageType: { type: String, default: 'orthanc' },
+        uploadedAt: { type: Date, default: Date.now }
+    }],
+    
+    // Case type for priority
+    caseType: {
+        type: String,
+        enum: ['routine', 'urgent', 'stat', 'emergency'],
+        default: 'routine'
+    }
     
 }, { 
     timestamps: true,

@@ -42,6 +42,7 @@ const AdminDashboard = React.memo(() => {
           category: activeCategory !== 'all' ? activeCategory : undefined,
         }
       });
+      console.log('Fetched studies:', response.data);
       
       if (response.data.success) {
         setAllStudies(response.data.data);

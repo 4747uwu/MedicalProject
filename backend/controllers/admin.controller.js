@@ -380,9 +380,11 @@ export const getAllStudiesForAdmin = async (req, res) => {
                 description: study.studyDescription || study.examDescription || 'N/A',
                 modality: study.modalitiesInStudy && study.modalitiesInStudy.length > 0 ? 
                          study.modalitiesInStudy.join(', ') : (study.modality || 'N/A'),
-                seriesImages: `${study.numberOfSeries || 0}/${study.numberOfImages || 0}`,
-                numberOfSeries: study.numberOfSeries || 0,
-                numberOfImages: study.numberOfImages || 0,
+                         seriesImages: study.seriesImages || `${study.seriesCount || 0}/${study.instanceCount || 0}`,
+                         seriesCount: study.seriesCount || 0,
+                         instanceCount: study.instanceCount || 0,
+                         numberOfSeries: study.seriesCount || study.numberOfSeries || 0,
+                         numberOfImages: study.instanceCount || study.numberOfImages || 0,
                 studyDateTime: study.studyDate && study.studyTime ? 
                               `${study.studyDate} ${study.studyTime.substring(0,6)}` : 
                               (study.studyDate || 'N/A'),

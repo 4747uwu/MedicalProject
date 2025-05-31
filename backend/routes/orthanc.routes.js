@@ -167,22 +167,13 @@ async function processDicomInstance(job) {
     }
 
     console.log(`[Queue Worker] 📋 Processing study: ${studyInstanceUID}`);
-    console.log(`[Queue Worker] 🔍 Instance details:`, {
-      sopInstanceUID,
-      seriesInstanceUID,
-      modality: instanceTags.Modality,
-      institutionName: instanceTags.InstitutionName
-    });
-
+    
     job.progress = 35;
 
-    console.log(`[Queue Worker] 🏥 Available DICOM tags for lab identification:`, {
-      InstitutionName: instanceTags.InstitutionName,
-      StationName: instanceTags.StationName,
-      Manufacturer: instanceTags.Manufacturer,
-      PerformingPhysicianName: instanceTags.PerformingPhysicianName,
-      ReferringPhysicianName: instanceTags.ReferringPhysicianName
-    });
+    // 🆕 NEW: Get series and instance counts from Orthanc
+    console.log(`[Queue Worker] 📊 Getting series/instance counts...`);
+    const seriesInstanceCounts = await getSeriesInstanceCounts(studyInstanceUID, orthancInstanceId);
+    console.log(`[Queue Worker] 📊 Series/Instance counts: ${seriesInstanceCounts.seriesCount} series, ${seriesInstanceCounts.instanceCount} instances`);
 
     // Get the real Orthanc Study ID
     const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
@@ -195,8 +186,6 @@ async function processDicomInstance(job) {
     
     // Enhanced database operations with better lab handling
     const patientRecord = await findOrCreatePatientFromTags(instanceTags);
-    
-    // Pass instanceTags to the enhanced lab function
     const labRecord = await findOrCreateSourceLab(instanceTags);
     
     job.progress = 70;
@@ -212,6 +201,11 @@ async function processDicomInstance(job) {
 
     if (dicomStudyDoc) {
       console.log(`[Queue Worker] 📝 Updating existing study: ${studyInstanceUID}`);
+      
+      // Update series and instance counts
+      dicomStudyDoc.seriesCount = seriesInstanceCounts.seriesCount;
+      dicomStudyDoc.instanceCount = seriesInstanceCounts.instanceCount;
+      dicomStudyDoc.seriesImages = `${seriesInstanceCounts.seriesCount}/${seriesInstanceCounts.instanceCount}`;
       
       // Only update if we have a real Orthanc Study ID and it's not already set
       if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
@@ -306,15 +300,16 @@ async function processDicomInstance(job) {
         seriesInstanceUID: seriesInstanceUID,
         orthancInstanceId: orthancInstanceId,
         modality: instanceTags.Modality || 'Unknown',
-        storageType: 'orthanc', // Store in Orthanc for now
+        storageType: 'orthanc',
         uploadedAt: new Date()
       };
       
       dicomStudyDoc = new DicomStudy({
-        orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
+        orthancStudyID: orthancStudyID,
         studyInstanceUID: studyInstanceUID,
         accessionNumber: instanceTags.AccessionNumber || '',
         patient: patientRecord._id,
+        patientId: patientRecord.patientID, // ← ADD THIS LINE - this was missing!
         sourceLab: labRecord._id,
         studyDate: instanceTags.StudyDate || '',
         studyTime: instanceTags.StudyTime || '',
@@ -322,11 +317,25 @@ async function processDicomInstance(job) {
         examDescription: instanceTags.StudyDescription || '',
         institutionName: instanceTags.InstitutionName || '',
         workflowStatus: 'new_study_received',
-        dicomFiles: [dicomFileEntry], // Add the first DICOM file
+        
+        // Series/instance counts
+        seriesCount: seriesInstanceCounts.seriesCount,
+        instanceCount: seriesInstanceCounts.instanceCount,
+        seriesImages: `${seriesInstanceCounts.seriesCount}/${seriesInstanceCounts.instanceCount}`,
+        
+        // Add patient info for denormalized data
+        patientInfo: {
+            patientID: patientRecord.patientID,
+            patientName: patientRecord.patientNameRaw,
+            gender: patientRecord.gender || '',
+            age: '' // Calculate if needed
+        },
+        
+        dicomFiles: [dicomFileEntry],
         statusHistory: [{
           status: 'new_study_received',
           changedAt: new Date(),
-          note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - Stored in Orthanc`
+          note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - ${seriesInstanceCounts.seriesCount} series, ${seriesInstanceCounts.instanceCount} instances`
         }],
       });
     }
@@ -335,7 +344,7 @@ async function processDicomInstance(job) {
     
     job.progress = 90;
     
-    // Enhanced WebSocket notification with lab information
+    // Enhanced WebSocket notification with series/instance counts
     const studyNotificationData = {
       _id: dicomStudyDoc._id,
       patientName: patientRecord.patientNameRaw,
@@ -348,14 +357,15 @@ async function processDicomInstance(job) {
       workflowStatus: dicomStudyDoc.workflowStatus,
       priority: dicomStudyDoc.caseType || 'routine',
       accessionNumber: dicomStudyDoc.accessionNumber,
-      isNewLab: labRecord.createdAt > new Date(Date.now() - 5000), // Lab created in last 5 seconds
+      seriesImages: `${seriesInstanceCounts.seriesCount}/${seriesInstanceCounts.instanceCount}`, // ✅ Now includes series/instance count
+      isNewLab: labRecord.createdAt > new Date(Date.now() - 5000),
       fileCount: dicomStudyDoc.dicomFiles?.length || 0,
       storageType: 'orthanc'
     };
 
     // Notify admins about new study
     try {
-      websocketService.notifyNewStudy(studyNotificationData);
+      await websocketService.notifyNewStudy(studyNotificationData);
     } catch (wsError) {
       console.warn(`[Queue Worker] ⚠️ WebSocket notification failed:`, wsError.message);
     }
@@ -411,6 +421,83 @@ async function processDicomInstance(job) {
     
     await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
     throw error;
+  }
+}
+
+// Add this helper function to get series and instance counts from Orthanc
+async function getSeriesInstanceCounts(studyInstanceUID, orthancInstanceId) {
+  try {
+    // First, try to get the study ID from Orthanc
+    const orthancStudyId = await getOrthancStudyId(studyInstanceUID);
+    
+    if (orthancStudyId) {
+      // Get series information from the study
+      const seriesUrl = `${ORTHANC_BASE_URL}/studies/${orthancStudyId}/series`;
+      const seriesResponse = await axios.get(seriesUrl, {
+        headers: { 'Authorization': orthancAuth },
+        timeout: 5000
+      });
+      
+      const seriesIds = seriesResponse.data;
+      let totalInstances = 0;
+      
+      // Get instance count for each series
+      for (const seriesId of seriesIds) {
+        const instancesUrl = `${ORTHANC_BASE_URL}/series/${seriesId}/instances`;
+        const instancesResponse = await axios.get(instancesUrl, {
+          headers: { 'Authorization': orthancAuth },
+          timeout: 3000
+        });
+        totalInstances += instancesResponse.data.length;
+      }
+      
+      return {
+        seriesCount: seriesIds.length,
+        instanceCount: totalInstances
+      };
+    } else {
+      // Fallback: If we can't find the study, return minimal info
+      console.warn(`Could not find study ${studyInstanceUID} in Orthanc for series/instance count`);
+      return {
+        seriesCount: 1, // At least one series since we have an instance
+        instanceCount: 1 // At least one instance
+      };
+    }
+  } catch (error) {
+    console.error('Error getting series/instance counts:', error.message);
+    return {
+      seriesCount: 1,
+      instanceCount: 1
+    };
+  }
+}
+
+// Update the getOrthancStudyId function to be more robust
+async function getOrthancStudyId(studyInstanceUID) {
+  try {
+    const studiesUrl = `${ORTHANC_BASE_URL}/studies`;
+    const studiesResponse = await axios.get(studiesUrl, {
+      headers: { 'Authorization': orthancAuth },
+      timeout: 5000
+    });
+    
+    for (const studyId of studiesResponse.data) {
+      const studyInfoUrl = `${ORTHANC_BASE_URL}/studies/${studyId}`;
+      const studyInfoResponse = await axios.get(studyInfoUrl, {
+        headers: { 'Authorization': orthancAuth },
+        timeout: 3000
+      });
+      
+      const mainDicomTags = studyInfoResponse.data.MainDicomTags;
+      if (mainDicomTags && mainDicomTags.StudyInstanceUID === studyInstanceUID) {
+        return studyId;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error finding Orthanc study ID:', error.message);
+    return null;
   }
 }
 

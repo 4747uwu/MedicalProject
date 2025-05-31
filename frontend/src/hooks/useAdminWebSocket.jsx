@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 
+const WS_URL = process.env.NODE_ENV === 'production' 
+  ? 'wss://your-domain.com/ws/admin' 
+  : 'ws://localhost:3000/ws/admin';
+
+const RECONNECT_INTERVAL = 5000; // 5 seconds
+const MAX_RECONNECT_ATTEMPTS = 10;
+const FALLBACK_FETCH_INTERVAL = 10000; // 10 seconds
+
 const useAdminWebSocket = (user) => {
   const ws = useRef(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -9,6 +17,7 @@ const useAdminWebSocket = (user) => {
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
   const reconnectTimeout = useRef(null);
+  const fallbackInterval = useRef(null);
 
   const connect = () => {
     if (!user || user.role !== 'admin') {
@@ -35,6 +44,12 @@ const useAdminWebSocket = (user) => {
         if (reconnectTimeout.current) {
           clearTimeout(reconnectTimeout.current);
           reconnectTimeout.current = null;
+        }
+        
+        // Clear fallback interval if it was set
+        if (fallbackInterval.current) {
+          clearInterval(fallbackInterval.current);
+          fallbackInterval.current = null;
         }
         
         // Subscribe to study notifications
@@ -99,17 +114,19 @@ const useAdminWebSocket = (user) => {
         });
         break;
         
-      case 'subscribed':
+      case 'subscribed_to_studies':  // Updated from 'subscribed'
         console.log('📋 Subscribed to study notifications');
         break;
         
-      case 'new_study':
+      // 🔧 FIX: Change from 'new_study' to 'new_study_notification'
+      case 'new_study_notification':
         const study = message.data;
         setNewStudyCount(prev => prev + 1);
         
-        // Show notification toast with medical icon
+        // Show notification toast with medical icon and series/instance info
+        const seriesInfo = study.seriesImages ? ` • ${study.seriesImages} Ser/Inst` : '';
         toast.success(
-          `New Study Received: ${study.patientName}`,
+          `New Study: ${study.patientName}${seriesInfo}`,
           {
             duration: 6000,
             icon: '🏥',
@@ -168,6 +185,11 @@ const useAdminWebSocket = (user) => {
     if (reconnectTimeout.current) {
       clearTimeout(reconnectTimeout.current);
       reconnectTimeout.current = null;
+    }
+    
+    if (fallbackInterval.current) {
+      clearInterval(fallbackInterval.current);
+      fallbackInterval.current = null;
     }
     
     if (ws.current) {
