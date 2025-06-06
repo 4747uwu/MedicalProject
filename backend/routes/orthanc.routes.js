@@ -20,7 +20,7 @@ const ORTHANC_PASSWORD = process.env.ORTHANC_PASSWORD || 'alicePassword';
 const orthancAuth = 'Basic ' + Buffer.from(ORTHANC_USERNAME + ':' + ORTHANC_PASSWORD).toString('base64');
 
 // --- Simple Redis Setup (without Bull queue) ---
-const REDIS_URL = 'rediss://default:ATDmAAIjcDFlY2U3MzZmZjIxNDQ0YmZmYmY0NmVlZTBhMjgwOTkyYnAxMA@just-pug-12518.upstash.io:6379';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'; // Use your Upstash Redis URL here
 
 const redis = new Redis(REDIS_URL, {
   maxRetriesPerRequest: 3,
@@ -167,22 +167,13 @@ async function processDicomInstance(job) {
     }
 
     console.log(`[Queue Worker] 📋 Processing study: ${studyInstanceUID}`);
-    console.log(`[Queue Worker] 🔍 Instance details:`, {
-      sopInstanceUID,
-      seriesInstanceUID,
-      modality: instanceTags.Modality,
-      institutionName: instanceTags.InstitutionName
-    });
-
+    
     job.progress = 35;
 
-    console.log(`[Queue Worker] 🏥 Available DICOM tags for lab identification:`, {
-      InstitutionName: instanceTags.InstitutionName,
-      StationName: instanceTags.StationName,
-      Manufacturer: instanceTags.Manufacturer,
-      PerformingPhysicianName: instanceTags.PerformingPhysicianName,
-      ReferringPhysicianName: instanceTags.ReferringPhysicianName
-    });
+    // 🆕 NEW: Get series and instance counts from Orthanc
+    console.log(`[Queue Worker] 📊 Getting series/instance counts...`);
+    const seriesInstanceCounts = await getSeriesInstanceCounts(studyInstanceUID, orthancInstanceId);
+    console.log(`[Queue Worker] 📊 Series/Instance counts: ${seriesInstanceCounts.seriesCount} series, ${seriesInstanceCounts.instanceCount} instances`);
 
     // Get the real Orthanc Study ID
     const orthancStudyID = await getOrthancStudyId(studyInstanceUID);
@@ -195,8 +186,6 @@ async function processDicomInstance(job) {
     
     // Enhanced database operations with better lab handling
     const patientRecord = await findOrCreatePatientFromTags(instanceTags);
-    
-    // Pass instanceTags to the enhanced lab function
     const labRecord = await findOrCreateSourceLab(instanceTags);
     
     job.progress = 70;
@@ -212,6 +201,41 @@ async function processDicomInstance(job) {
 
     if (dicomStudyDoc) {
       console.log(`[Queue Worker] 📝 Updating existing study: ${studyInstanceUID}`);
+      
+      // 🔧 CRITICAL FIX: Don't overwrite counts, update them intelligently
+      // First, check if this specific instance is already recorded
+      const existingFileIndex = dicomStudyDoc.dicomFiles.findIndex(
+        file => file.sopInstanceUID === sopInstanceUID
+      );
+      
+      let shouldUpdateCounts = false;
+      
+      if (existingFileIndex === -1) {
+        // This is a NEW instance for this study
+        shouldUpdateCounts = true;
+        console.log(`[Queue Worker] 🆕 New instance ${sopInstanceUID} for existing study`);
+      } else {
+        console.log(`[Queue Worker] 🔄 Updating existing instance ${sopInstanceUID}`);
+      }
+      
+      // 🔧 NEW: Smart series/instance count management
+      if (shouldUpdateCounts) {
+        // Get current counts from Orthanc to ensure accuracy
+        const currentCounts = await getSeriesInstanceCounts(studyInstanceUID, orthancInstanceId);
+        
+        // Only update if Orthanc counts are higher (new data arrived)
+        if (currentCounts.seriesCount >= (dicomStudyDoc.seriesCount || 0) && 
+            currentCounts.instanceCount >= (dicomStudyDoc.instanceCount || 0)) {
+          
+          console.log(`[Queue Worker] 📊 Updating counts: Series ${dicomStudyDoc.seriesCount || 0} → ${currentCounts.seriesCount}, Instances ${dicomStudyDoc.instanceCount || 0} → ${currentCounts.instanceCount}`);
+          
+          dicomStudyDoc.seriesCount = currentCounts.seriesCount;
+          dicomStudyDoc.instanceCount = currentCounts.instanceCount;
+          dicomStudyDoc.seriesImages = `${currentCounts.seriesCount}/${currentCounts.instanceCount}`;
+        } else {
+          console.log(`[Queue Worker] ⚠️ Orthanc counts seem lower than stored counts, keeping stored values`);
+        }
+      }
       
       // Only update if we have a real Orthanc Study ID and it's not already set
       if (orthancStudyID && !dicomStudyDoc.orthancStudyID) {
@@ -237,12 +261,17 @@ async function processDicomInstance(job) {
         console.log(`[Queue Worker] 🔄 Lab changed from ${currentLabId} (${previousLabName}) to ${newLabId} (${labRecord.name})`);
         dicomStudyDoc.sourceLab = labRecord._id;
         
-        // FIXED: Add status history entry for lab change with correct previous lab name
         dicomStudyDoc.statusHistory.push({
           status: dicomStudyDoc.workflowStatus,
           changedAt: new Date(),
           note: `Lab assignment updated from "${previousLabName}" to "${labRecord.name}" (Instance: ${sopInstanceUID}, Job: ${job.id})`
         });
+      }
+      
+      // 🆕 NEW: Update referring physician if available
+      if (instanceTags.ReferringPhysicianName && !dicomStudyDoc.referringPhysicianName) {
+          dicomStudyDoc.referringPhysicianName = instanceTags.ReferringPhysicianName;
+          console.log(`[Queue Worker] 👨‍⚕️ Updated referring physician: ${instanceTags.ReferringPhysicianName}`);
       }
       
       // Update patient and study details
@@ -258,45 +287,53 @@ async function processDicomInstance(job) {
         dicomStudyDoc.institutionName = instanceTags.InstitutionName;
       }
       
-      // ADD/UPDATE DICOM FILES ARRAY (without Wasabi)
+      // 🔧 ENHANCED: Better DICOM files array management
       if (!dicomStudyDoc.dicomFiles) {
         dicomStudyDoc.dicomFiles = [];
       }
-      
-      // Check if this instance is already recorded
-      const existingFileIndex = dicomStudyDoc.dicomFiles.findIndex(
-        file => file.sopInstanceUID === sopInstanceUID
-      );
       
       const dicomFileEntry = {
         sopInstanceUID: sopInstanceUID,
         seriesInstanceUID: seriesInstanceUID,
         orthancInstanceId: orthancInstanceId,
         modality: instanceTags.Modality || 'Unknown',
-        storageType: 'orthanc', // Store in Orthanc for now
-        uploadedAt: new Date()
+        storageType: 'orthanc',
+        uploadedAt: new Date(),
+        // 🔧 NEW: Add more tracking info
+        imagePosition: instanceTags.ImagePositionPatient || null,
+        imageNumber: instanceTags.InstanceNumber || null,
+        sliceLocation: instanceTags.SliceLocation || null
       };
       
       if (existingFileIndex >= 0) {
-        // Update existing file entry
-        dicomStudyDoc.dicomFiles[existingFileIndex] = dicomFileEntry;
+        // Update existing file entry with new information
+        dicomStudyDoc.dicomFiles[existingFileIndex] = {
+          ...dicomStudyDoc.dicomFiles[existingFileIndex],
+          ...dicomFileEntry,
+          updatedAt: new Date() // Track when it was last updated
+        };
         console.log(`[Queue Worker] 🔄 Updated existing DICOM file entry for SOP: ${sopInstanceUID}`);
       } else {
         // Add new file entry
         dicomStudyDoc.dicomFiles.push(dicomFileEntry);
-        console.log(`[Queue Worker] ➕ Added new DICOM file entry for SOP: ${sopInstanceUID}`);
+        console.log(`[Queue Worker] ➕ Added new DICOM file entry for SOP: ${sopInstanceUID} (Total files: ${dicomStudyDoc.dicomFiles.length})`);
       }
       
       if (dicomStudyDoc.workflowStatus === 'no_active_study') {
         dicomStudyDoc.workflowStatus = 'new_study_received';
       }
       
-      dicomStudyDoc.statusHistory.push({
-        status: 'instance_processed',
-        changedAt: new Date(),
-        note: `Instance ${sopInstanceUID} processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - Stored in Orthanc`
-      });
+      // 🔧 ENHANCED: Better status history with instance tracking
+      const isNewInstance = existingFileIndex === -1;
+      const statusNote = isNewInstance 
+        ? `New instance ${sopInstanceUID} added to study (${dicomStudyDoc.dicomFiles.length} total files). Series: ${dicomStudyDoc.seriesCount}, Instances: ${dicomStudyDoc.instanceCount} - Lab: ${labRecord.name}` 
+        : `Instance ${sopInstanceUID} updated for study - Lab: ${labRecord.name}`;
       
+      dicomStudyDoc.statusHistory.push({
+        status: isNewInstance ? 'instance_added' : 'instance_updated',
+        changedAt: new Date(),
+        note: statusNote
+      });
     } else {
       console.log(`[Queue Worker] 🆕 Creating new study: ${studyInstanceUID}`);
       
@@ -306,15 +343,16 @@ async function processDicomInstance(job) {
         seriesInstanceUID: seriesInstanceUID,
         orthancInstanceId: orthancInstanceId,
         modality: instanceTags.Modality || 'Unknown',
-        storageType: 'orthanc', // Store in Orthanc for now
+        storageType: 'orthanc',
         uploadedAt: new Date()
       };
       
       dicomStudyDoc = new DicomStudy({
-        orthancStudyID: orthancStudyID, // This will be null if study not found in Orthanc
+        orthancStudyID: orthancStudyID,
         studyInstanceUID: studyInstanceUID,
         accessionNumber: instanceTags.AccessionNumber || '',
         patient: patientRecord._id,
+        patientId: patientRecord.patientID, // ← ADD THIS LINE - this was missing!
         sourceLab: labRecord._id,
         studyDate: instanceTags.StudyDate || '',
         studyTime: instanceTags.StudyTime || '',
@@ -322,12 +360,29 @@ async function processDicomInstance(job) {
         examDescription: instanceTags.StudyDescription || '',
         institutionName: instanceTags.InstitutionName || '',
         workflowStatus: 'new_study_received',
-        dicomFiles: [dicomFileEntry], // Add the first DICOM file
+        
+        // Series/instance counts
+        seriesCount: seriesInstanceCounts.seriesCount,
+        instanceCount: seriesInstanceCounts.instanceCount,
+        seriesImages: `${seriesInstanceCounts.seriesCount}/${seriesInstanceCounts.instanceCount}`,
+        
+        // Add patient info for denormalized data
+        patientInfo: {
+            patientID: patientRecord.patientID,
+            patientName: patientRecord.patientNameRaw,
+            gender: patientRecord.gender || '',
+            age: '' // Calculate if needed
+        },
+        
+        dicomFiles: [dicomFileEntry],
         statusHistory: [{
           status: 'new_study_received',
           changedAt: new Date(),
-          note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - Stored in Orthanc`
+          note: `First instance ${sopInstanceUID} for new study processed asynchronously (Job ${job.id}). Lab: ${labRecord.name} - ${seriesInstanceCounts.seriesCount} series, ${seriesInstanceCounts.instanceCount} instances`
         }],
+        
+        // 🆕 NEW: Add referring physician
+        referringPhysicianName: instanceTags.ReferringPhysicianName || '',
       });
     }
     
@@ -335,7 +390,7 @@ async function processDicomInstance(job) {
     
     job.progress = 90;
     
-    // Enhanced WebSocket notification with lab information
+    // Enhanced WebSocket notification with series/instance counts
     const studyNotificationData = {
       _id: dicomStudyDoc._id,
       patientName: patientRecord.patientNameRaw,
@@ -348,14 +403,15 @@ async function processDicomInstance(job) {
       workflowStatus: dicomStudyDoc.workflowStatus,
       priority: dicomStudyDoc.caseType || 'routine',
       accessionNumber: dicomStudyDoc.accessionNumber,
-      isNewLab: labRecord.createdAt > new Date(Date.now() - 5000), // Lab created in last 5 seconds
+      seriesImages: `${seriesInstanceCounts.seriesCount}/${seriesInstanceCounts.instanceCount}`, // ✅ Now includes series/instance count
+      isNewLab: labRecord.createdAt > new Date(Date.now() - 5000),
       fileCount: dicomStudyDoc.dicomFiles?.length || 0,
       storageType: 'orthanc'
     };
 
     // Notify admins about new study
     try {
-      websocketService.notifyNewStudy(studyNotificationData);
+      await websocketService.notifyNewStudy(studyNotificationData);
     } catch (wsError) {
       console.warn(`[Queue Worker] ⚠️ WebSocket notification failed:`, wsError.message);
     }
@@ -411,6 +467,242 @@ async function processDicomInstance(job) {
     
     await redis.setex(`job:result:${requestId}`, 3600, JSON.stringify(errorResult));
     throw error;
+  }
+}
+
+// 🔧 FIXED: getSeriesInstanceCounts function - handle series objects properly
+async function getSeriesInstanceCounts(studyInstanceUID, orthancInstanceId) {
+  try {
+    console.log(`[getSeriesInstanceCounts] 🔍 Getting counts for study: ${studyInstanceUID}`);
+    
+    // Method 1: Try using the Orthanc study ID
+    const orthancStudyId = await getOrthancStudyId(studyInstanceUID);
+    
+    if (orthancStudyId) {
+      console.log(`[getSeriesInstanceCounts] ✅ Found Orthanc study ID: ${orthancStudyId}`);
+      
+      try {
+        // Get series information from the study
+        const seriesUrl = `${ORTHANC_BASE_URL}/studies/${orthancStudyId}/series`;
+        console.log(`[getSeriesInstanceCounts] 🔍 Fetching series from: ${seriesUrl}`);
+        
+        const seriesResponse = await axios.get(seriesUrl, {
+          headers: { 'Authorization': orthancAuth },
+          timeout: 8000
+        });
+        
+        // 🔧 FIX: Handle both string arrays and object arrays
+        let seriesIds = seriesResponse.data;
+        
+        // Check if response contains objects or strings
+        if (seriesIds.length > 0 && typeof seriesIds[0] === 'object') {
+          // If it's an array of objects, extract the ID field
+          seriesIds = seriesIds.map(series => {
+            if (typeof series === 'string') return series;
+            if (series.ID) return series.ID;
+            if (series.id) return series.id;
+            // If it's an object without clear ID field, try to use the whole object
+            console.warn(`[getSeriesInstanceCounts] ⚠️ Unexpected series object format:`, series);
+            return null;
+          }).filter(id => id !== null);
+        }
+        
+        console.log(`[getSeriesInstanceCounts] 📊 Found ${seriesIds.length} series IDs:`, seriesIds);
+        
+        let totalInstances = 0;
+        const seriesDetails = [];
+        
+        // Get instance count for each series
+        for (const seriesId of seriesIds) {
+          try {
+            console.log(`[getSeriesInstanceCounts] 🔍 Getting instances for series: ${seriesId}`);
+            
+            const instancesUrl = `${ORTHANC_BASE_URL}/series/${seriesId}/instances`;
+            const instancesResponse = await axios.get(instancesUrl, {
+              headers: { 'Authorization': orthancAuth },
+              timeout: 5000
+            });
+            
+            const instanceCount = instancesResponse.data.length;
+            totalInstances += instanceCount;
+            seriesDetails.push({ seriesId, instanceCount });
+            
+            console.log(`[getSeriesInstanceCounts] 📋 Series ${seriesId}: ${instanceCount} instances`);
+          } catch (seriesError) {
+            console.warn(`[getSeriesInstanceCounts] ⚠️ Error getting instances for series ${seriesId}:`, seriesError.message);
+            
+            // 🔧 NEW: Try alternative approach for this series
+            try {
+              const seriesInfoUrl = `${ORTHANC_BASE_URL}/series/${seriesId}`;
+              const seriesInfoResponse = await axios.get(seriesInfoUrl, {
+                headers: { 'Authorization': orthancAuth },
+                timeout: 3000
+              });
+              
+              const instances = seriesInfoResponse.data.Instances || [];
+              const instanceCount = instances.length;
+              totalInstances += instanceCount;
+              seriesDetails.push({ seriesId, instanceCount, method: 'series_info' });
+              
+              console.log(`[getSeriesInstanceCounts] 📋 Series ${seriesId} (via info): ${instanceCount} instances`);
+            } catch (altError) {
+              console.warn(`[getSeriesInstanceCounts] ❌ Alternative method also failed for series ${seriesId}:`, altError.message);
+              // Skip this series but don't fail completely
+              continue;
+            }
+          }
+        }
+        
+        const result = {
+          seriesCount: seriesIds.length,
+          instanceCount: totalInstances,
+          seriesDetails: seriesDetails,
+          method: 'orthanc_study_lookup'
+        };
+        
+        console.log(`[getSeriesInstanceCounts] ✅ Final counts: ${result.seriesCount} series, ${result.instanceCount} instances`);
+        return result;
+        
+      } catch (studyError) {
+        console.error(`[getSeriesInstanceCounts] ❌ Error accessing study ${orthancStudyId}:`, studyError.message);
+        throw studyError; // Re-throw to trigger fallback methods
+      }
+    }
+    
+    // Method 2: Try using the instance to find its parent study
+    console.log(`[getSeriesInstanceCounts] 🔄 Trying instance-based lookup for: ${orthancInstanceId}`);
+    
+    try {
+      const instanceUrl = `${ORTHANC_BASE_URL}/instances/${orthancInstanceId}`;
+      const instanceResponse = await axios.get(instanceUrl, {
+        headers: { 'Authorization': orthancAuth },
+        timeout: 5000
+      });
+      
+      const instanceInfo = instanceResponse.data;
+      console.log(`[getSeriesInstanceCounts] 📋 Instance info:`, {
+        id: instanceInfo.ID,
+        parentSeries: instanceInfo.ParentSeries,
+        parentStudy: instanceInfo.ParentStudy
+      });
+      
+      if (instanceInfo.ParentStudy) {
+        // Use the parent study to get counts
+        const parentStudyId = instanceInfo.ParentStudy;
+        const seriesUrl = `${ORTHANC_BASE_URL}/studies/${parentStudyId}/series`;
+        
+        const seriesResponse = await axios.get(seriesUrl, {
+          headers: { 'Authorization': orthancAuth },
+          timeout: 5000
+        });
+        
+        // Handle series ID extraction properly
+        let seriesIds = seriesResponse.data;
+        if (seriesIds.length > 0 && typeof seriesIds[0] === 'object') {
+          seriesIds = seriesIds.map(series => series.ID || series.id || series).filter(Boolean);
+        }
+        
+        let totalInstances = 0;
+        
+        for (const seriesId of seriesIds) {
+          try {
+            const instancesUrl = `${ORTHANC_BASE_URL}/series/${seriesId}/instances`;
+            const instancesResponse = await axios.get(instancesUrl, {
+              headers: { 'Authorization': orthancAuth },
+              timeout: 3000
+            });
+            totalInstances += instancesResponse.data.length;
+          } catch (seriesError) {
+            console.warn(`[getSeriesInstanceCounts] ⚠️ Skipping series ${seriesId} due to error:`, seriesError.message);
+            continue;
+          }
+        }
+        
+        const result = {
+          seriesCount: seriesIds.length,
+          instanceCount: totalInstances,
+          method: 'instance_parent_lookup'
+        };
+        
+        console.log(`[getSeriesInstanceCounts] ✅ Found via instance parent: ${result.seriesCount} series, ${result.instanceCount} instances`);
+        return result;
+      }
+    } catch (instanceError) {
+      console.warn(`[getSeriesInstanceCounts] ⚠️ Instance-based lookup failed:`, instanceError.message);
+    }
+    
+    // Method 3: Use MongoDB to count existing instances for this study
+    console.log(`[getSeriesInstanceCounts] 🔄 Trying database-based counting...`);
+    
+    try {
+      const existingStudy = await DicomStudy.findOne({ studyInstanceUID });
+      if (existingStudy && existingStudy.dicomFiles && existingStudy.dicomFiles.length > 0) {
+        // Count unique series
+        const uniqueSeries = new Set(
+          existingStudy.dicomFiles.map(file => file.seriesInstanceUID).filter(Boolean)
+        );
+        
+        const dbCounts = {
+          seriesCount: Math.max(uniqueSeries.size, 1),
+          instanceCount: existingStudy.dicomFiles.length,
+          method: 'database_counting'
+        };
+        
+        console.log(`[getSeriesInstanceCounts] ✅ Database counts: ${dbCounts.seriesCount} series, ${dbCounts.instanceCount} instances`);
+        return dbCounts;
+      }
+    } catch (dbError) {
+      console.warn(`[getSeriesInstanceCounts] ⚠️ Database counting failed:`, dbError.message);
+    }
+    
+    // Method 4: Final fallback - conservative estimates
+    console.log(`[getSeriesInstanceCounts] ⚠️ All methods failed, using conservative fallback`);
+    return {
+      seriesCount: 1,
+      instanceCount: 1,
+      fallback: true,
+      reason: 'All counting methods failed',
+      method: 'fallback'
+    };
+    
+  } catch (error) {
+    console.error(`[getSeriesInstanceCounts] ❌ Error getting series/instance counts:`, error.message);
+    return {
+      seriesCount: 1,
+      instanceCount: 1,
+      fallback: true,
+      error: error.message,
+      method: 'error_fallback'
+    };
+  }
+}
+
+// Update the getOrthancStudyId function to be more robust
+async function getOrthancStudyId(studyInstanceUID) {
+  try {
+    const studiesUrl = `${ORTHANC_BASE_URL}/studies`;
+    const studiesResponse = await axios.get(studiesUrl, {
+      headers: { 'Authorization': orthancAuth },
+      timeout: 5000
+    });
+    
+    for (const studyId of studiesResponse.data) {
+      const studyInfoUrl = `${ORTHANC_BASE_URL}/studies/${studyId}`;
+      const studyInfoResponse = await axios.get(studyInfoUrl, {
+        headers: { 'Authorization': orthancAuth },
+        timeout: 3000
+      });
+      
+      const mainDicomTags = studyInfoResponse.data.MainDicomTags;
+      if (mainDicomTags && mainDicomTags.StudyInstanceUID === studyInstanceUID) {
+        return studyId;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error finding Orthanc study ID:', error.message);
+    return null;
   }
 }
 

@@ -31,6 +31,11 @@ const DoctorRegistrationForm = () => {
   const [languages, setLanguages] = useState('');
   const [availableDays, setAvailableDays] = useState([]);
 
+  // 🆕 NEW: Signature Upload State
+  const [signatureFile, setSignatureFile] = useState(null);
+  const [signaturePreview, setSignaturePreview] = useState('');
+  const [signatureError, setSignatureError] = useState('');
+
   // Step navigation functions
   const nextStep = () => {
     // Validate current step
@@ -55,6 +60,54 @@ const DoctorRegistrationForm = () => {
     setError('');
   };
   
+  // 🆕 NEW: Handle signature upload
+  const handleSignatureUpload = (e) => {
+    const file = e.target.files[0];
+    setSignatureError('');
+    
+    if (file) {
+      // Validate file size (2MB limit)
+      if (file.size > 2 * 1024 * 1024) {
+        setSignatureError('Signature file must be less than 2MB');
+        setSignatureFile(null);
+        setSignaturePreview('');
+        e.target.value = ''; // Clear the input
+        return;
+      }
+      
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setSignatureError('Please select a valid image file (PNG, JPG, JPEG)');
+        setSignatureFile(null);
+        setSignaturePreview('');
+        e.target.value = '';
+        return;
+      }
+      
+      setSignatureFile(file);
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setSignaturePreview(e.target.result);
+      };
+      reader.readAsDataURL(file);
+      setError('');
+    }
+  };
+
+  // 🆕 NEW: Remove signature
+  const removeSignature = () => {
+    setSignatureFile(null);
+    setSignaturePreview('');
+    setSignatureError('');
+    // Clear the file input
+    const fileInput = document.getElementById('signature');
+    if (fileInput) {
+      fileInput.value = '';
+    }
+  };
+  
   // Handle the close action
   const handleClose = () => {
     // Check if any data has been entered
@@ -70,7 +123,8 @@ const DoctorRegistrationForm = () => {
       contactPhoneOffice || 
       biography || 
       languages ||
-      availableDays.length > 0;
+      availableDays.length > 0 ||
+      signatureFile; // 🆕 NEW: Include signature in data check
       
     if (hasData) {
       // Show confirmation dialog if data exists
@@ -100,30 +154,47 @@ const DoctorRegistrationForm = () => {
     }
     
     try {
-      await api.post('/admin/doctors/register', {
-        username,
-        email,
-        fullName,
-        specialization,
-        licenseNumber,
-        department,
-        qualifications: qualifications.split(',').map(q => q.trim()).filter(q => q), // Convert comma-separated string to array
-        yearsOfExperience: yearsOfExperience ? parseInt(yearsOfExperience, 10) : undefined,
-        contactPhoneOffice,
-        isActiveProfile,
-        biography,
-        languages: languages.split(',').map(l => l.trim()).filter(l => l),
-        availableDays
+      // 🆕 NEW: Create FormData for file upload
+      const formData = new FormData();
+      
+      // Append all form fields
+      formData.append('username', username);
+      formData.append('email', email);
+      formData.append('fullName', fullName);
+      formData.append('specialization', specialization);
+      formData.append('licenseNumber', licenseNumber);
+      formData.append('department', department);
+      formData.append('qualifications', qualifications.split(',').map(q => q.trim()).filter(q => q).join(','));
+      formData.append('yearsOfExperience', yearsOfExperience ? parseInt(yearsOfExperience, 10) : '');
+      formData.append('contactPhoneOffice', contactPhoneOffice);
+      formData.append('isActiveProfile', isActiveProfile);
+      formData.append('biography', biography);
+      formData.append('languages', languages.split(',').map(l => l.trim()).filter(l => l).join(','));
+      formData.append('availableDays', JSON.stringify(availableDays));
+      
+      // 🆕 NEW: Add signature file if provided
+      if (signatureFile) {
+        formData.append('signature', signatureFile);
+      }
+
+      const response = await api.post('/admin/doctors/register', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
       });
       
-      setSuccess('Doctor registered successfully! A password has been generated and sent to the doctor\'s email.');
+      setSuccess(
+        `Doctor registered successfully! ${response.data.signatureUploaded ? 'Signature uploaded.' : ''} A password has been generated and sent to the doctor's email.`
+      );
+      
       setTimeout(() => {
         navigate('/admin/dashboard');
       }, 2000);
+      
     } catch (error) {
       console.error('Error registering doctor:', error);
       
-      if (error.response && error.response.data && error.response.data.message) {
+      if (error.response?.data?.message) {
         setError(error.response.data.message);
       } else {
         setError('An error occurred while registering the doctor. Please try again.');
@@ -136,7 +207,8 @@ const DoctorRegistrationForm = () => {
   // Left panel features list
   const doctorFeatures = [
     "Automated account creation",
-    "Secure password generation",
+    "Secure password generation", 
+    "Digital signature storage", // 🆕 NEW: Added signature feature
     "Patient assignment system",
     "Integrated reporting tools",
     "Schedule management"
@@ -515,12 +587,12 @@ const DoctorRegistrationForm = () => {
               </div>
             )}
             
-            {/* STEP 3 - Additional Information */}
+            {/* STEP 3 - Additional Information & Signature */}
             {currentStep === 3 && (
               <div className={`${stepContainerClass} animate-fade-in`}>
                 <div className="mb-6">
                   <h2 className="text-xl font-bold text-gray-900 mb-1">Additional Information</h2>
-                  <p className="text-gray-600 text-sm">Add optional details about the doctor</p>
+                  <p className="text-gray-600 text-sm">Add optional details and digital signature</p>
                 </div>
                 
                 <form onSubmit={handleSubmit}>
@@ -573,6 +645,81 @@ const DoctorRegistrationForm = () => {
                         ))}
                       </div>
                     </div>
+
+                    {/* 🆕 NEW: Digital Signature Upload Section */}
+                    <div className="border-t border-gray-200 pt-5">
+                      <div className="mb-4">
+                        <h3 className="text-lg font-medium text-gray-900 mb-1">Digital Signature</h3>
+                        <p className="text-sm text-gray-600">Upload a signature image for medical reports (optional)</p>
+                      </div>
+
+                      <div>
+                        <label htmlFor="signature" className="block text-sm font-medium text-gray-700 mb-1">
+                          Doctor Signature (Optional)
+                        </label>
+                        <input
+                          id="signature"
+                          type="file"
+                          accept="image/*"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          onChange={handleSignatureUpload}
+                        />
+                        <div className="flex items-start mt-2 space-x-4">
+                          <div className="flex-1">
+                            <p className="text-xs text-gray-500">
+                              Upload a PNG/JPG signature image (max 2MB). Will be optimized for medical reports.
+                            </p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              Recommended size: 400x200 pixels for best quality
+                            </p>
+                          </div>
+                          {signatureFile && (
+                            <button
+                              type="button"
+                              onClick={removeSignature}
+                              className="text-red-600 hover:text-red-800 text-xs font-medium"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                        
+                        {/* 🆕 NEW: Signature Error Display */}
+                        {signatureError && (
+                          <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
+                            <p className="text-xs text-red-600 flex items-center">
+                              <svg className="w-4 h-4 mr-1 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                              </svg>
+                              {signatureError}
+                            </p>
+                          </div>
+                        )}
+                        
+                        {/* 🆕 NEW: Signature Preview */}
+                        {signaturePreview && (
+                          <div className="mt-4 p-4 border border-gray-200 rounded-lg bg-gray-50">
+                            <div className="flex items-start justify-between mb-2">
+                              <p className="text-xs font-medium text-gray-700">Signature Preview:</p>
+                              <div className="text-xs text-gray-500">
+                                {signatureFile && `${(signatureFile.size / 1024).toFixed(1)} KB`}
+                              </div>
+                            </div>
+                            <div className="bg-white border border-gray-300 rounded p-3 flex items-center justify-center min-h-[100px]">
+                              <img 
+                                src={signaturePreview} 
+                                alt="Signature preview" 
+                                className="max-h-20 max-w-full object-contain"
+                                style={{ filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1))' }}
+                              />
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2">
+                              ✓ Signature will be automatically optimized and resized for medical reports
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   
                     <div className="flex justify-between pt-4">
                       <button
@@ -593,10 +740,12 @@ const DoctorRegistrationForm = () => {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            Registering...
+                            {signatureFile ? 'Registering & Uploading...' : 'Registering...'}
                           </span>
                         ) : (
-                          "Register Doctor"
+                          <>
+                            {signatureFile ? 'Register Doctor & Upload Signature' : 'Register Doctor'}
+                          </>
                         )}
                       </button>
                     </div>

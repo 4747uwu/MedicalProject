@@ -1,9 +1,11 @@
 import Patient from '../models/patientModel.js';
-import DicomStudy from '../models/dicomStudyModel.js';
 import User from '../models/userModel.js';
-import NodeCache from 'node-cache';
-
-const cache = new NodeCache({ stdTTL: 300 });
+import DicomStudy from '../models/dicomStudyModel.js';
+import Doctor from '../models/doctorModel.js';
+import Lab from '../models/labModel.js';
+import Document from '../models/documentModal.js'; // 🔧 NEW: Document model
+import WasabiService from '../services/wasabi.service.js'; // 🔧 NEW: Wasabi integration
+import cache from '../utils/cache.js';
 
 // 🔧 WORKFLOW STATUS MAPPING (same as existing)
 const WORKFLOW_STATUS_MAPPING = {
@@ -61,7 +63,7 @@ export const getPatientDetailedView = async (req, res) => {
                 .populate('clinicalInfo.lastModifiedBy', 'fullName email')
                 .lean(),
             DicomStudy.find({ patientId: patientId })
-                .select('studyInstanceUID studyDate modality accessionNumber workflowStatus caseType examDescription examType sourceLab')
+                .select('studyInstanceUID studyDate modality accessionNumber workflowStatus caseType examDescription examType sourceLab uploadedReports')
                 .populate('sourceLab', 'name')
                 .sort({ createdAt: -1 })
                 .lean()
@@ -77,16 +79,48 @@ export const getPatientDetailedView = async (req, res) => {
         // 🔧 OPTIMIZED: Get current study efficiently
         const currentStudy = allStudies.length > 0 ? allStudies[0] : null;
 
+        // 🔧 NEW: Extract study reports separately (don't merge)
+        const studyReports = [];
+        allStudies.forEach(study => {
+            if (study.uploadedReports && study.uploadedReports.length > 0) {
+                study.uploadedReports.forEach(report => {
+                    studyReports.push({
+                        _id: report._id,
+                        fileName: report.filename,
+                        fileType: report.reportType || 'study-report',
+                        documentType: report.documentType || 'clinical',
+                        contentType: report.contentType,
+                        size: report.size,
+                        uploadedAt: report.uploadedAt,
+                        uploadedBy: report.uploadedBy,
+                        storageType: report.storageType || 'wasabi',
+                        wasabiKey: report.wasabiKey,
+                        wasabiBucket: report.wasabiBucket,
+                        reportStatus: report.reportStatus,
+                        studyId: study.studyInstanceUID,
+                        studyObjectId: study._id,
+                        source: 'study'
+                    });
+                });
+            }
+        });
+
+        console.log(`📋 Found ${patient.documents?.length || 0} patient documents and ${studyReports.length} study reports`);
+
         const responseData = {
             patientInfo: {
                 patientId: patient.patientID,
+                patientID: patient.patientID, // Add both for compatibility
                 fullName: patient.computed?.fullName || 
                          `${patient.firstName || ''} ${patient.lastName || ''}`.trim() || 'Unknown',
+                firstName: patient.firstName || '',
+                lastName: patient.lastName || '',
                 age: patient.ageString || 'N/A',
                 gender: patient.gender || 'N/A',
                 dateOfBirth: patient.dateOfBirth || 'N/A',
                 contactPhone: patient.contactInformation?.phone || 'N/A',
-                contactEmail: patient.contactInformation?.email || 'N/A'
+                contactEmail: patient.contactInformation?.email || 'N/A',
+                mrn: patient.mrn || 'N/A'
             },
             clinicalInfo: {
                 clinicalHistory: patient.clinicalInfo?.clinicalHistory || '',
@@ -95,21 +129,26 @@ export const getPatientDetailedView = async (req, res) => {
                 lastModifiedBy: patient.clinicalInfo?.lastModifiedBy || null,
                 lastModifiedAt: patient.clinicalInfo?.lastModifiedAt || null
             },
+            medicalHistory: {
+                clinicalHistory: patient.medicalHistory?.clinicalHistory || patient.clinicalInfo?.clinicalHistory || '',
+                previousInjury: patient.medicalHistory?.previousInjury || patient.clinicalInfo?.previousInjury || '',
+                previousSurgery: patient.medicalHistory?.previousSurgery || patient.clinicalInfo?.previousSurgery || ''
+            },
             studyInfo: currentStudy ? {
                 studyId: currentStudy.studyInstanceUID,
                 studyDate: currentStudy.studyDate,
                 modality: currentStudy.modality || 'N/A',
                 accessionNumber: currentStudy.accessionNumber || 'N/A',
-                status: currentStudy.workflowStatus
+                status: currentStudy.workflowStatus,
+                caseType: currentStudy.caseType || 'routine',
+                workflowStatus: currentStudy.workflowStatus,
+                images: []
             } : {},
             visitInfo: {
-                caseType: currentStudy?.caseType || 'ROUTINE',
-                center: currentStudy?.sourceLab?.name || 'Default Lab',
-                examType: currentStudy?.examType || 'N/A',
                 examDescription: currentStudy?.examDescription || 'N/A',
-                orderDate: currentStudy?.createdAt || patient.createdAt,
+                center: currentStudy?.sourceLab?.name || 'Default Lab',
                 studyDate: currentStudy?.studyDate || 'N/A',
-                studyStatus: currentStudy?.workflowStatus || 'new_study_received'
+                caseType: currentStudy?.caseType?.toUpperCase() || 'ROUTINE'
             },
             allStudies: allStudies.map(study => ({
                 studyId: study.studyInstanceUID,
@@ -118,7 +157,24 @@ export const getPatientDetailedView = async (req, res) => {
                 accessionNumber: study.accessionNumber || 'N/A',
                 status: study.workflowStatus
             })),
-            documents: patient.documents || []
+            // 🔧 ENHANCED: Include studies array for compatibility
+            studies: allStudies.map(study => ({
+                _id: study._id,
+                studyInstanceUID: study.studyInstanceUID,
+                accessionNumber: study.accessionNumber || 'N/A',
+                studyDateTime: study.studyDate,
+                modality: study.modality || 'N/A',
+                description: study.examDescription || '',
+                workflowStatus: study.workflowStatus,
+                priority: study.caseType?.toUpperCase() || 'ROUTINE',
+                location: study.sourceLab?.name || 'Default Lab',
+                assignedDoctor: study.assignedDoctor || 'Not Assigned',
+                reportFinalizedAt: study.reportFinalizedAt
+            })),
+            // 🔧 SEPARATE: Keep patient documents and study reports separate
+            documents: patient.documents || [],
+            studyReports: studyReports, // 🔧 NEW: Study reports as separate array
+            referralInfo: patient.referralInfo || ''
         };
 
         // 🔧 PERFORMANCE: Cache the result
@@ -352,29 +408,276 @@ export const updatePatientDetails = async (req, res) => {
     }
 };
 
-// 🔧 UPLOAD DOCUMENT
+// 🔧 UPDATED: Upload document to Wasabi instead of MongoDB
 export const uploadDocument = async (req, res) => {
+  console.log('🔧 Uploading document to Wasabi storage...', req.params);
   try {
     const { patientId } = req.params;
-    const userId = req.user.id;
-    const { type } = req.body;
+    const userId = req.user.id; // This is working now as we can see from logs
+    const { type, studyId, documentType = 'clinical' } = req.body;
     const file = req.file;
 
     console.log(`📤 Uploading document for patient: ${patientId}`);
+    console.log(`👤 User ID: ${userId}, Role: ${req.user.role}`);
 
     if (!file) {
+      console.log('❌ No file uploaded');
       return res.status(400).json({
         success: false,
         message: 'No file uploaded'
       });
     }
 
+    console.log(`📁 File details:`, {
+      name: file.originalname,
+      size: file.size,
+      mimetype: file.mimetype,
+      hasBuffer: !!file.buffer
+    });
+
+    // Validate file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({
+        success: false,
+        message: 'File size exceeds 10MB limit'
+      });
+    }
+
     // Validate user
-    const user = await User.findById(userId).select('fullName email');
+    const user = await User.findById(userId).select('fullName email role');
+    console.log(`🔍 Found user:`, user);
+    
+    if (!user) {
+      console.log('❌ User not found in database');
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check permissions
+    console.log(`🔐 User role: ${user.role}`);
+    if (!['lab_staff', 'admin'].includes(user.role)) {
+      console.log(`❌ Insufficient permissions. Role: ${user.role}`);
+      return res.status(403).json({
+        success: false,
+        message: `Insufficient permissions. Required: lab_staff or admin, Got: ${user.role}`
+      });
+    }
+
+    // Find patient - 🔧 IMPORTANT: Don't use .lean() here since we need to save later
+    const patient = await Patient.findOne({ patientID: patientId });
+    console.log(`🔍 Found patient:`, patient ? 'Yes' : 'No');
+    
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    // 🔧 CRITICAL FIX: Initialize documents array if it doesn't exist
+    if (!patient.documents) {
+      console.log('🔧 Initializing patient.documents array (was undefined)');
+      patient.documents = [];
+    } else if (!Array.isArray(patient.documents)) {
+      console.log('🔧 Converting patient.documents to array (was not an array)');
+      patient.documents = [];
+    }
+
+    console.log(`🔍 Patient documents array:`, {
+      exists: !!patient.documents,
+      isArray: Array.isArray(patient.documents),
+      length: patient.documents?.length || 0
+    });
+
+    // Find study if studyId provided
+    let study = null;
+    if (studyId && studyId !== 'general') {
+      study = await DicomStudy.findOne({ studyInstanceUID: studyId });
+      if (!study) {
+        console.log(`⚠️ Study not found: ${studyId}, continuing without study reference`);
+        // Don't fail, just continue without study reference
+      }
+    }
+
+    // 🔧 Upload to Wasabi
+    console.log('☁️ Uploading to Wasabi...');
+    const wasabiResult = await WasabiService.uploadDocument(
+      file.buffer,
+      file.originalname,
+      documentType,
+      {
+        patientId: patientId,
+        studyId: studyId || 'general',
+        uploadedBy: user.fullName,
+        userId: userId
+      }
+    );
+
+    if (!wasabiResult.success) {
+      throw new Error('Failed to upload to Wasabi storage: ' + (wasabiResult.error || 'Unknown error'));
+    }
+
+    console.log('✅ Wasabi upload successful:', wasabiResult.key);
+
+    // 🔧 Create document record in database
+    const documentRecord = new Document({
+      fileName: file.originalname,
+      fileSize: file.size,
+      contentType: file.mimetype,
+      documentType: documentType,
+      wasabiKey: wasabiResult.key,
+      wasabiBucket: wasabiResult.bucket,
+      patientId: patientId,
+      studyId: study ? study._id : null,
+      uploadedBy: userId
+    });
+
+    await documentRecord.save();
+    console.log('✅ Document record saved to database:', documentRecord._id);
+
+    // 🔧 FIXED: Create document reference for patient
+    const documentReference = {
+      _id: documentRecord._id,
+      fileName: file.originalname,
+      fileType: type || documentType,
+      contentType: file.mimetype,
+      size: file.size,
+      uploadedAt: new Date(),
+      uploadedBy: user.fullName,
+      wasabiKey: wasabiResult.key,
+      wasabiBucket: wasabiResult.bucket,
+      storageType: 'wasabi'
+    };
+
+    // 🔧 DOUBLE CHECK: Ensure documents array is ready before pushing
+    if (!Array.isArray(patient.documents)) {
+      console.log('🔧 EMERGENCY FIX: Converting patient.documents to array right before push');
+      patient.documents = [];
+    }
+
+    console.log('📝 Adding document reference to patient...');
+    patient.documents.push(documentReference);
+    
+    try {
+      await patient.save();
+      console.log('✅ Patient document reference saved successfully');
+    } catch (saveError) {
+      console.error('❌ Error saving patient document reference:', saveError);
+      // Don't fail the entire operation, document is already in Wasabi and Document collection
+      console.log('⚠️ Continuing despite patient save error - document is still accessible via Document collection');
+    }
+
+    // 🔧 Update study if provided
+    if (study) {
+      try {
+        if (!study.uploadedReports) {
+          study.uploadedReports = [];
+        }
+
+        const studyDocumentRef = {
+          _id: documentRecord._id,
+          filename: file.originalname,
+          contentType: file.mimetype,
+          size: file.size,
+          reportType: 'uploaded-report',
+          uploadedAt: new Date(),
+          uploadedBy: user.fullName,
+          reportStatus: 'finalized',
+          wasabiKey: wasabiResult.key,
+          wasabiBucket: wasabiResult.bucket,
+          storageType: 'wasabi',
+          documentType: documentType
+        };
+
+        study.uploadedReports.push(studyDocumentRef);
+        
+        // 🔧 Update study status if this is a report
+        if (documentType === 'report' || documentType === 'clinical') {
+          study.ReportAvailable = true;
+          
+          if (study.workflowStatus === 'report_in_progress') {
+            study.workflowStatus = 'report_finalized';
+            if (!study.statusHistory) study.statusHistory = [];
+            study.statusHistory.push({
+              status: 'report_finalized',
+              changedAt: new Date(),
+              changedBy: userId,
+              note: `Report uploaded: ${file.originalname}`
+            });
+          }
+        }
+        
+        // 🔧 CRITICAL FIX: Normalize caseType before saving
+        if (study.caseType) {
+          study.caseType = study.caseType.toLowerCase();
+          console.log(`🔧 Normalized caseType from ${study.caseType.toUpperCase()} to ${study.caseType}`);
+        }
+        
+        await study.save();
+        console.log(`✅ Study ${study.studyInstanceUID} updated with document reference`);
+        
+      } catch (studyError) {
+        console.error('❌ Error updating study:', studyError);
+        // Don't fail the entire operation
+      }
+    }
+
+    // 🔧 Clear cache for patient details
+    const cacheKey = `patient_detail_${patientId}`;
+    cache.del(cacheKey);
+    console.log('🧹 Cleared patient details cache');
+
+    console.log('✅ Document uploaded successfully to Wasabi');
+
+    res.json({
+      success: true,
+      message: 'Document uploaded successfully',
+      document: {
+        id: documentRecord._id,
+        fileName: documentRecord.fileName,
+        fileType: documentType,
+        size: documentRecord.fileSize,
+        uploadedAt: documentRecord.uploadedAt,
+        uploadedBy: user.fullName,
+        wasabiLocation: wasabiResult.location || wasabiResult.key
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error uploading document:', error);
+    console.error('❌ Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload document',
+      error: error.message
+    });
+  }
+};
+
+// 🔧 UPDATED: Download document from Wasabi
+export const downloadDocument = async (req, res) => {
+  try {
+    const { patientId, docIndex } = req.params;
+    const userId = req.user.id;
+
+    console.log(`⬇️ Downloading document ${docIndex} for patient: ${patientId}`);
+
+    // Validate user
+    const user = await User.findById(userId).select('role fullName');
     if (!user) {
       return res.status(401).json({
         success: false,
         message: 'User not found'
+      });
+    }
+
+    // Check permissions
+    if (!['lab_staff', 'admin', 'doctor_account'].includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions'
       });
     }
 
@@ -387,48 +690,77 @@ export const uploadDocument = async (req, res) => {
       });
     }
 
-    // Convert file to base64
-    const fileData = file.buffer.toString('base64');
+    // Validate document index
+    const documentIndex = parseInt(docIndex);
+    if (isNaN(documentIndex) || documentIndex < 0 || documentIndex >= patient.documents.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid document index'
+      });
+    }
 
-    // Create document object
-    const document = {
-      fileName: file.originalname,
-      fileType: type || 'Clinical',
-      contentType: file.mimetype,
-      data: fileData,
-      size: file.size,
-      uploadedAt: new Date(),
-      uploadedBy: user.fullName
-    };
+    const documentRef = patient.documents[documentIndex];
 
-    // Add document to patient
-    patient.documents.push(document);
-    await patient.save();
+    // 🔧 Handle Wasabi vs Legacy storage
+    if (documentRef.storageType === 'wasabi' && documentRef.wasabiKey) {
+      console.log('☁️ Downloading from Wasabi...');
+      
+      // Download from Wasabi
+      const wasabiResult = await WasabiService.downloadFile(
+        documentRef.wasabiBucket,
+        documentRef.wasabiKey
+      );
 
-    console.log('✅ Document uploaded successfully');
-
-    res.json({
-      success: true,
-      message: 'Document uploaded successfully',
-      document: {
-        fileName: document.fileName,
-        fileType: document.fileType,
-        uploadedAt: document.uploadedAt,
-        uploadedBy: document.uploadedBy
+      if (!wasabiResult.success) {
+        throw new Error('Failed to download from Wasabi storage');
       }
-    });
+
+      // Set response headers
+      res.setHeader('Content-Type', documentRef.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${documentRef.fileName}"`);
+      res.setHeader('Content-Length', wasabiResult.data.length);
+
+      console.log('✅ Document download from Wasabi successful');
+      
+      // Send file
+      res.send(wasabiResult.data);
+
+    } else {
+      // 🔧 Legacy: Download from MongoDB (backward compatibility)
+      console.log('🗄️ Downloading from MongoDB (legacy)...');
+      
+      if (!documentRef.data) {
+        return res.status(404).json({
+          success: false,
+          message: 'Document data not found'
+        });
+      }
+
+      // Convert base64 back to buffer
+      const fileBuffer = Buffer.from(documentRef.data, 'base64');
+
+      // Set response headers
+      res.setHeader('Content-Type', documentRef.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${documentRef.fileName}"`);
+      res.setHeader('Content-Length', fileBuffer.length);
+
+      console.log('✅ Document download from MongoDB successful');
+      
+      // Send file
+      res.send(fileBuffer);
+    }
 
   } catch (error) {
-    console.error('❌ Error uploading document:', error);
+    console.error('❌ Error downloading document:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
+      message: 'Failed to download document',
       error: error.message
     });
   }
 };
 
-// 🔧 DELETE DOCUMENT
+// 🔧 UPDATED: Delete document from Wasabi and database
 export const deleteDocument = async (req, res) => {
   try {
     const { patientId, docIndex } = req.params;
@@ -463,7 +795,36 @@ export const deleteDocument = async (req, res) => {
       });
     }
 
-    // Remove document
+    const documentRef = patient.documents[documentIndex];
+
+    // 🔧 Delete from Wasabi if it's stored there
+    if (documentRef.storageType === 'wasabi' && documentRef.wasabiKey) {
+      console.log('☁️ Deleting from Wasabi...');
+      
+      try {
+        await WasabiService.deleteFile(
+          documentRef.wasabiBucket,
+          documentRef.wasabiKey,
+          true // permanent deletion
+        );
+        console.log('✅ File deleted from Wasabi');
+      } catch (wasabiError) {
+        console.warn('⚠️ Failed to delete from Wasabi:', wasabiError.message);
+        // Continue with database cleanup even if Wasabi deletion fails
+      }
+
+      // Delete from Document collection
+      if (documentRef._id) {
+        try {
+          await Document.findByIdAndDelete(documentRef._id);
+          console.log('✅ Document record deleted from database');
+        } catch (dbError) {
+          console.warn('⚠️ Failed to delete document record:', dbError.message);
+        }
+      }
+    }
+
+    // Remove document reference from patient
     patient.documents.splice(documentIndex, 1);
     await patient.save();
 
@@ -478,26 +839,27 @@ export const deleteDocument = async (req, res) => {
     console.error('❌ Error deleting document:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
+      message: 'Failed to delete document',
       error: error.message
     });
   }
 };
 
-// 🔧 DOWNLOAD DOCUMENT
-export const downloadDocument = async (req, res) => {
+// 🔧 NEW: Get presigned URL for direct download (for admin/doctor dashboard)
+export const getDocumentDownloadUrl = async (req, res) => {
   try {
     const { patientId, docIndex } = req.params;
     const userId = req.user.id;
+    const { expiresIn = 3600 } = req.query; // Default 1 hour
 
-    console.log(`⬇️ Downloading document ${docIndex} for patient: ${patientId}`);
+    console.log(`🔗 Getting download URL for document ${docIndex} for patient: ${patientId}`);
 
     // Validate user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(401).json({
+    const user = await User.findById(userId).select('role');
+    if (!user || !['lab_staff', 'admin', 'doctor_account'].includes(user.role)) {
+      return res.status(403).json({
         success: false,
-        message: 'User not found'
+        message: 'Insufficient permissions'
       });
     }
 
@@ -519,26 +881,109 @@ export const downloadDocument = async (req, res) => {
       });
     }
 
-    const document = patient.documents[documentIndex];
+    const documentRef = patient.documents[documentIndex];
 
-    // Convert base64 back to buffer
-    const fileBuffer = Buffer.from(document.data, 'base64');
+    // 🔧 Generate presigned URL for Wasabi storage
+    if (documentRef.storageType === 'wasabi' && documentRef.wasabiKey) {
+      const urlResult = await WasabiService.generatePresignedUrl(
+        documentRef.wasabiBucket,
+        documentRef.wasabiKey,
+        parseInt(expiresIn),
+        'GetObject'
+      );
 
-    // Set response headers
-    res.setHeader('Content-Type', document.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${document.fileName}"`);
-    res.setHeader('Content-Length', fileBuffer.length);
+      if (!urlResult.success) {
+        throw new Error('Failed to generate download URL');
+      }
 
-    console.log('✅ Document download initiated');
+      res.json({
+        success: true,
+        downloadUrl: urlResult.url,
+        expiresAt: urlResult.expiresAt,
+        fileName: documentRef.fileName,
+        fileSize: documentRef.size,
+        contentType: documentRef.contentType
+      });
 
-    // Send file
-    res.send(fileBuffer);
+    } else {
+      // For legacy MongoDB storage, return API endpoint
+      res.json({
+        success: true,
+        downloadUrl: `/api/lab/patients/${patientId}/documents/${docIndex}/download`,
+        expiresAt: new Date(Date.now() + (parseInt(expiresIn) * 1000)),
+        fileName: documentRef.fileName,
+        fileSize: documentRef.size,
+        contentType: documentRef.contentType,
+        storageType: 'legacy'
+      });
+    }
 
   } catch (error) {
-    console.error('❌ Error downloading document:', error);
+    console.error('❌ Error getting download URL:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error',
+      message: 'Failed to generate download URL',
+      error: error.message
+    });
+  }
+};
+
+// 🔧 NEW: List patient documents with metadata
+export const getPatientDocuments = async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const userId = req.user.id;
+
+    console.log(`📋 Getting documents for patient: ${patientId}`);
+
+    // Validate user
+    const user = await User.findById(userId).select('role');
+    if (!user || !['lab_staff', 'admin', 'doctor_account'].includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions'
+      });
+    }
+
+    // Find patient
+    const patient = await Patient.findOne({ patientID: patientId });
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    // Format documents response
+    const documents = patient.documents.map((doc, index) => ({
+      index: index,
+      id: doc._id,
+      fileName: doc.fileName,
+      fileType: doc.fileType,
+      contentType: doc.contentType,
+      size: doc.size,
+      sizeFormatted: WasabiService.formatBytes(doc.size),
+      uploadedAt: doc.uploadedAt,
+      uploadedBy: doc.uploadedBy,
+      storageType: doc.storageType || 'legacy',
+      canDownload: true,
+      canDelete: ['lab_staff', 'admin'].includes(user.role)
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        patientId: patientId,
+        documentsCount: documents.length,
+        documents: documents
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting patient documents:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get patient documents',
       error: error.message
     });
   }
@@ -764,13 +1209,223 @@ export const bulkUpdateStudies = async (req, res) => {
   }
 };
 
+// 🔧 FIXED: Download study report - fetch Wasabi info from Document collection
+export const downloadStudyReport = async (req, res) => {
+  console.log('🔧 Starting downloadStudyReport...', req.params);
+  
+  try {
+    const { studyId, reportId } = req.params;
+    const userId = req.user.id;
+
+    console.log(`⬇️ Downloading study report ${reportId} from study: ${studyId}`);
+
+    // Validate user
+    const user = await User.findById(userId).select('role fullName');
+    if (!user) {
+      console.log('❌ User not found');
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    console.log(`✅ User validated: ${user.fullName} (${user.role})`);
+
+    // Check permissions
+    if (!['lab_staff', 'admin', 'doctor_account'].includes(user.role)) {
+      console.log(`❌ Insufficient permissions: ${user.role}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions'
+      });
+    }
+
+    console.log('✅ Permissions validated');
+
+    // Find study
+    console.log(`🔍 Looking for study: ${studyId}`);
+    const study = await DicomStudy.findOne({ studyInstanceUID: studyId });
+    if (!study) {
+      console.log(`❌ Study not found: ${studyId}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Study not found'
+      });
+    }
+
+    console.log(`✅ Study found: ${study._id}`);
+    console.log(`📋 Study has ${study.uploadedReports?.length || 0} uploaded reports`);
+
+    // Find report in study
+    const report = study.uploadedReports?.find(r => r._id.toString() === reportId);
+    if (!report) {
+      console.log(`❌ Report not found in study: ${reportId}`);
+      console.log(`📋 Available reports:`, study.uploadedReports?.map(r => ({
+        id: r._id.toString(),
+        filename: r.filename
+      })) || []);
+      return res.status(404).json({
+        success: false,
+        message: 'Report not found in study'
+      });
+    }
+
+    console.log(`✅ Report found in study: ${report.filename}`);
+    console.log(`📁 Study report details:`, {
+      filename: report.filename,
+      contentType: report.contentType,
+      size: report.size,
+      reportId: report._id.toString()
+    });
+
+    // 🔧 CRITICAL FIX: Get complete document info from Document collection
+    console.log(`🔍 Fetching complete document info from Document collection...`);
+    const documentRecord = await Document.findById(reportId);
+    
+    if (!documentRecord) {
+      console.log(`❌ Document record not found in Document collection: ${reportId}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Document record not found'
+      });
+    }
+
+    console.log(`✅ Document record found:`, {
+      fileName: documentRecord.fileName,
+      fileSize: documentRecord.fileSize,
+      contentType: documentRecord.contentType,
+      wasabiKey: documentRecord.wasabiKey,
+      wasabiBucket: documentRecord.wasabiBucket,
+      hasWasabiInfo: !!(documentRecord.wasabiKey && documentRecord.wasabiBucket)
+    });
+
+    // 🔧 Download from Wasabi using Document collection info
+    if (documentRecord.wasabiKey && documentRecord.wasabiBucket) {
+      console.log('☁️ Downloading study report from Wasabi...');
+      console.log(`📂 Bucket: ${documentRecord.wasabiBucket}, Key: ${documentRecord.wasabiKey}`);
+      
+      try {
+        const wasabiResult = await WasabiService.downloadFile(
+          documentRecord.wasabiBucket,
+          documentRecord.wasabiKey
+        );
+
+        console.log(`📥 Wasabi download result:`, {
+          success: wasabiResult.success,
+          dataLength: wasabiResult.data?.length || 0,
+          error: wasabiResult.error
+        });
+
+        if (!wasabiResult.success) {
+          console.log(`❌ Wasabi download failed: ${wasabiResult.error}`);
+          throw new Error('Failed to download from Wasabi storage: ' + wasabiResult.error);
+        }
+
+        console.log('✅ File downloaded from Wasabi successfully');
+
+        // Set response headers using Document collection data
+        res.setHeader('Content-Type', documentRecord.contentType || 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${documentRecord.fileName}"`);
+        res.setHeader('Content-Length', wasabiResult.data.length);
+        res.setHeader('Cache-Control', 'no-cache');
+
+        console.log('📤 Sending file to client...');
+        
+        // Send file
+        res.send(wasabiResult.data);
+        
+        console.log('✅ Study report download completed successfully');
+
+      } catch (wasabiError) {
+        console.error('❌ Wasabi download error:', wasabiError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to download file from storage',
+          error: wasabiError.message
+        });
+      }
+
+    } else {
+      // 🔧 FALLBACK: Try legacy storage if no Wasabi info
+      console.log('🗄️ No Wasabi info found, checking for legacy storage...');
+      
+      if (documentRecord.fileData) {
+        console.log('📁 Found legacy file data, downloading from MongoDB...');
+        
+        try {
+          // Convert base64 back to buffer
+          const fileBuffer = Buffer.from(documentRecord.fileData, 'base64');
+
+          // Set response headers
+          res.setHeader('Content-Type', documentRecord.contentType || 'application/octet-stream');
+          res.setHeader('Content-Disposition', `attachment; filename="${documentRecord.fileName}"`);
+          res.setHeader('Content-Length', fileBuffer.length);
+          res.setHeader('Cache-Control', 'no-cache');
+
+          console.log('📤 Sending legacy file to client...');
+          
+          // Send file
+          res.send(fileBuffer);
+          
+          console.log('✅ Study report download from legacy storage completed successfully');
+
+        } catch (legacyError) {
+          console.error('❌ Legacy storage download error:', legacyError);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to download file from legacy storage',
+            error: legacyError.message
+          });
+        }
+
+      } else {
+        console.log('❌ No file data found in any storage');
+        console.log(`📋 Document storage info:`, {
+          hasWasabiKey: !!documentRecord.wasabiKey,
+          hasWasabiBucket: !!documentRecord.wasabiBucket,
+          hasFileData: !!documentRecord.fileData,
+          isActive: documentRecord.isActive
+        });
+        
+        return res.status(404).json({
+          success: false,
+          message: 'Document file not found in any storage system',
+          details: {
+            documentId: reportId,
+            hasWasabiKey: !!documentRecord.wasabiKey,
+            hasWasabiBucket: !!documentRecord.wasabiBucket,
+            hasFileData: !!documentRecord.fileData,
+            isActive: documentRecord.isActive
+          }
+        });
+      }
+    }
+
+  } catch (error) {
+    console.error('❌ Error downloading study report:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Make sure we always send a response
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to download study report',
+        error: error.message
+      });
+    }
+  }
+};
+
 export default {
   getPatientDetailedView,
   updatePatientDetails,
   uploadDocument,
   deleteDocument,
   downloadDocument,
+  getDocumentDownloadUrl, // 🔧 NEW
+  getPatientDocuments, // 🔧 NEW
   updateStudyStatus,
   getAllPatients,
-  bulkUpdateStudies
+  bulkUpdateStudies,
+  downloadStudyReport // 🔧 NEW
 };

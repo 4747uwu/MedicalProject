@@ -1,17 +1,30 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { debounce } from 'lodash'; // Install lodash if not already installed
+import { debounce } from 'lodash';
 import { format } from 'date-fns';
 import WorklistTable from './WorklistTable';
 
+// 🔧 UPDATED: WorklistSearch.jsx - Remove pagination props, focus on single-page mode
 const WorklistSearch = React.memo(({ 
   allStudies = [], 
   loading = false, 
   totalRecords = 0, 
-  currentPage = 1, 
-  totalPages = 1, 
-  onPageChange,
   userRole = 'admin',
-  onAssignmentComplete
+  onAssignmentComplete,
+  onView,
+  activeCategory,
+  onCategoryChange,
+  categoryStats,
+  recordsPerPage,
+  onRecordsPerPageChange,
+  // 🆕 NEW: Backend date filter props
+  dateFilter = 'last24h',
+  onDateFilterChange,
+  customDateFrom = '',
+  customDateTo = '',
+  onCustomDateChange,
+  dateType = 'UploadDate',
+  onDateTypeChange,
+  onSearchWithBackend
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchType, setSearchType] = useState("");
@@ -23,6 +36,35 @@ const WorklistSearch = React.memo(({
   const [patientId, setPatientId] = useState('');
   const [accessionNumber, setAccessionNumber] = useState('');
   const [description, setDescription] = useState('');
+  
+  // Enhanced filters matching the UI design
+  const [refName, setRefName] = useState('');
+  const [workflowStatus, setWorkflowStatus] = useState('all');
+  // 🔧 REMOVED: Local date state - now using props from Dashboard
+  // const [dateType, setDateType] = useState('StudyDate');
+  // const [dateFrom, setDateFrom] = useState('');
+  // const [dateTo, setDateTo] = useState('');
+  const [emergencyCase, setEmergencyCase] = useState(false);
+  const [mlcCase, setMlcCase] = useState(false);
+  const [studyType, setStudyType] = useState('all');
+  
+  // Modality filters
+  const [modalities, setModalities] = useState({
+    CT: false,
+    MR: false,
+    CR: false,
+    DX: false,
+    PR: false,
+    'CT\\SR': false
+  });
+
+  // Status counts for tabs
+  const [statusCounts, setStatusCounts] = useState({
+    all: 0,
+    pending: 0,
+    inprogress: 0,
+    completed: 0
+  });
 
   // 🔧 MEMOIZE LOCATIONS
   const locations = useMemo(() => {
@@ -30,7 +72,18 @@ const WorklistSearch = React.memo(({
     return uniqueLocations.map(loc => ({ id: loc, name: loc }));
   }, [allStudies]);
 
-  // 🔧 MEMOIZE FILTERED STUDIES - CRITICAL OPTIMIZATION
+  // Calculate status counts
+  useEffect(() => {
+    const counts = {
+      all: allStudies.length,
+      pending: allStudies.filter(s => ['new_study_received', 'pending_assignment'].includes(s.workflowStatus)).length,
+      inprogress: allStudies.filter(s => ['assigned_to_doctor', 'report_in_progress'].includes(s.workflowStatus)).length,
+      completed: allStudies.filter(s => ['report_finalized', 'final_report_downloaded'].includes(s.workflowStatus)).length
+    };
+    setStatusCounts(counts);
+  }, [allStudies]);
+
+  // 🔧 SIMPLIFIED: Frontend filtering only for non-date filters
   const filteredStudies = useMemo(() => {
     let filtered = [...allStudies];
 
@@ -54,12 +107,24 @@ const WorklistSearch = React.memo(({
       });
     }
 
+    // Workflow status filter
+    if (workflowStatus !== 'all') {
+      const statusMap = {
+        pending: ['new_study_received', 'pending_assignment'],
+        inprogress: ['assigned_to_doctor', 'report_in_progress'],
+        completed: ['report_finalized', 'final_report_downloaded']
+      };
+      filtered = filtered.filter(study => 
+        statusMap[workflowStatus]?.includes(study.workflowStatus) || study.workflowStatus === workflowStatus
+      );
+    }
+
     // Location filter
     if (selectedLocation !== 'ALL') {
       filtered = filtered.filter(study => study.location === selectedLocation);
     }
 
-    // Advanced search filters
+    // Advanced search filters (non-date)
     if (patientName.trim()) {
       filtered = filtered.filter(study => 
         (study.patientName || '').toLowerCase().includes(patientName.toLowerCase())
@@ -69,6 +134,12 @@ const WorklistSearch = React.memo(({
     if (patientId.trim()) {
       filtered = filtered.filter(study => 
         (study.patientId || '').toLowerCase().includes(patientId.toLowerCase())
+      );
+    }
+
+    if (refName.trim()) {
+      filtered = filtered.filter(study => 
+        (study.referredBy || '').toLowerCase().includes(refName.toLowerCase())
       );
     }
 
@@ -84,8 +155,45 @@ const WorklistSearch = React.memo(({
       );
     }
 
+    // 🔧 REMOVED: Date filtering - now handled by backend
+    // Date filtering is now handled by the backend through API parameters
+
+    // Modality filter
+    const selectedModalities = Object.entries(modalities)
+      .filter(([key, value]) => value)
+      .map(([key]) => key);
+    
+    if (selectedModalities.length > 0) {
+      filtered = filtered.filter(study => {
+        const studyModality = study.modality || '';
+        return selectedModalities.some(mod => studyModality.includes(mod));
+      });
+    }
+
+    // Emergency case filter
+    if (emergencyCase) {
+      filtered = filtered.filter(study => 
+        study.caseType === 'urgent' || study.caseType === 'emergency' || study.priority === 'URGENT'
+      );
+    }
+
+    // MLC case filter
+    if (mlcCase) {
+      filtered = filtered.filter(study => study.mlcCase === true);
+    }
+
+    // Study type filter
+    if (studyType !== 'all') {
+      filtered = filtered.filter(study => study.studyType === studyType);
+    }
+
     return filtered;
-  }, [allStudies, quickSearchTerm, searchType, selectedLocation, patientName, patientId, accessionNumber, description]);
+  }, [
+    allStudies, quickSearchTerm, searchType, selectedLocation, 
+    patientName, patientId, refName, accessionNumber, description,
+    workflowStatus, modalities, emergencyCase, mlcCase, studyType
+    // 🔧 REMOVED: Date dependencies - now handled by backend
+  ]);
 
   // 🔧 DEBOUNCED SEARCH
   const debouncedSetQuickSearchTerm = useMemo(
@@ -95,11 +203,45 @@ const WorklistSearch = React.memo(({
     []
   );
 
+  // 🆕 NEW: Backend search with parameters
+  const handleBackendSearch = useCallback(() => {
+    if (!onSearchWithBackend) return;
+
+    const searchParams = {};
+    
+    // Add search filters
+    if (quickSearchTerm.trim()) {
+      searchParams.search = quickSearchTerm.trim();
+    }
+    
+    if (patientName.trim()) {
+      searchParams.patientName = patientName.trim();
+    }
+    
+    if (workflowStatus !== 'all') {
+      searchParams.status = workflowStatus;
+    }
+
+    // Add modality filters
+    const selectedModalities = Object.entries(modalities)
+      .filter(([key, value]) => value)
+      .map(([key]) => key);
+    
+    if (selectedModalities.length > 0) {
+      searchParams.modality = selectedModalities.join(',');
+    }
+
+    console.log('🔍 WORKLIST SEARCH: Triggering backend search with params:', searchParams);
+    onSearchWithBackend(searchParams);
+  }, [
+    quickSearchTerm, patientName, workflowStatus, modalities, onSearchWithBackend
+  ]);
+
   // 🔧 MEMOIZED CALLBACKS
   const handleQuickSearch = useCallback((e) => {
     e.preventDefault();
-    // Search happens automatically via memoized filteredStudies
-  }, []);
+    handleBackendSearch();
+  }, [handleBackendSearch]);
 
   const handleClear = useCallback(() => {
     setQuickSearchTerm('');
@@ -107,18 +249,95 @@ const WorklistSearch = React.memo(({
     setSelectedLocation('ALL');
     setPatientName('');
     setPatientId('');
+    setRefName('');
     setAccessionNumber('');
     setDescription('');
-  }, []);
+    setWorkflowStatus('all');
+    // 🔧 UPDATED: Clear date filters via props
+    if (onCustomDateChange) {
+      onCustomDateChange('', '');
+    }
+    if (onDateFilterChange) {
+      onDateFilterChange('last24h');
+    }
+    if (onDateTypeChange) {
+      onDateTypeChange('UploadDate');
+    }
+    setEmergencyCase(false);
+    setMlcCase(false);
+    setStudyType('all');
+    setModalities({
+      CT: false,
+      MR: false,
+      CR: false,
+      DX: false,
+      PR: false,
+      'CT\\SR': false
+    });
+    
+    // Trigger backend refresh
+    handleBackendSearch();
+  }, [onCustomDateChange, onDateFilterChange, onDateTypeChange, handleBackendSearch]);
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded(!isExpanded);
   }, [isExpanded]);
 
+  // Handle modality checkbox changes
+  const handleModalityChange = useCallback((modality, checked) => {
+    setModalities(prev => ({
+      ...prev,
+      [modality]: checked
+    }));
+  }, []);
+
+  // 🔧 UPDATED: Quick date presets now use backend
+  const setDatePreset = useCallback((preset) => {
+    console.log(`📅 WORKLIST SEARCH: Setting date preset to ${preset}`);
+    
+    if (onDateFilterChange) {
+      onDateFilterChange(preset);
+    }
+    
+    // For custom dates, set the values
+    if (preset === 'custom' && onCustomDateChange) {
+      const today = new Date();
+      let from, to;
+      
+      // You can set default custom date range here if needed
+      from = format(today, 'yyyy-MM-dd');
+      to = format(today, 'yyyy-MM-dd');
+      
+      onCustomDateChange(from, to);
+    }
+  }, [onDateFilterChange, onCustomDateChange]);
+
+  // 🆕 NEW: Handle custom date changes
+  const handleCustomDateFromChange = useCallback((value) => {
+    if (onCustomDateChange) {
+      onCustomDateChange(value, customDateTo);
+    }
+  }, [customDateTo, onCustomDateChange]);
+
+  const handleCustomDateToChange = useCallback((value) => {
+    if (onCustomDateChange) {
+      onCustomDateChange(customDateFrom, value);
+    }
+  }, [customDateFrom, onCustomDateChange]);
+
   // 🔧 MEMOIZE ACTIVE FILTERS CHECK
   const hasActiveFilters = useMemo(() => {
-    return quickSearchTerm || patientName || patientId || accessionNumber || description || selectedLocation !== 'ALL';
-  }, [quickSearchTerm, patientName, patientId, accessionNumber, description, selectedLocation]);
+    const selectedModalityCount = Object.values(modalities).filter(Boolean).length;
+    return quickSearchTerm || patientName || patientId || refName || accessionNumber || 
+           description || selectedLocation !== 'ALL' || workflowStatus !== 'all' ||
+           emergencyCase || mlcCase || studyType !== 'all' || 
+           selectedModalityCount > 0 || dateFilter !== 'last24h' ||
+           (dateFilter === 'custom' && (customDateFrom || customDateTo));
+  }, [
+    quickSearchTerm, patientName, patientId, refName, accessionNumber, description,
+    selectedLocation, workflowStatus, emergencyCase, mlcCase, 
+    studyType, modalities, dateFilter, customDateFrom, customDateTo
+  ]);
 
   return (
     <div className="space-y-6">
@@ -129,7 +348,7 @@ const WorklistSearch = React.memo(({
           {hasActiveFilters && (
             <div className="flex items-center space-x-2 mb-4">
               <span className="px-3 py-1 bg-blue-100 text-blue-800 text-sm font-medium rounded-full">
-                {filteredStudies.length} results
+                {filteredStudies.length} results from {allStudies.length} total
               </span>
               <button
                 onClick={handleClear}
@@ -140,7 +359,7 @@ const WorklistSearch = React.memo(({
             </div>
           )}
 
-          {/* Top Search Bar */}
+          {/* Top Search Bar - remains the same */}
           <div className="flex items-center space-x-3 flex-wrap gap-y-2">
             {/* Search Type Selector */}
             <div className="relative">
@@ -149,10 +368,10 @@ const WorklistSearch = React.memo(({
                 value={searchType}
                 onChange={(e) => setSearchType(e.target.value)}
               >
-                <option value="">🔍 All Fields</option>
-                <option value="patientName">👤 Patient Name</option>
-                <option value="patientId">🆔 Patient ID</option>
-                <option value="accession">📋 Accession</option>
+                <option value="">All Fields</option>
+                <option value="patientName">Patient Name</option>
+                <option value="patientId">Patient ID</option>
+                <option value="accession">Accession</option>
               </select>
             </div>
             
@@ -161,7 +380,7 @@ const WorklistSearch = React.memo(({
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="🔍 Search by Patient ID, Name, or Accession..."
+                  placeholder="Search by Patient ID, Name and Accession"
                   className="w-full bg-white border border-gray-300 rounded-lg px-4 py-2 pr-12 text-sm placeholder-gray-500 hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
                   onChange={(e) => debouncedSetQuickSearchTerm(e.target.value)}
                 />
@@ -183,9 +402,9 @@ const WorklistSearch = React.memo(({
                 value={selectedLocation}
                 onChange={(e) => setSelectedLocation(e.target.value)}
               >
-                <option value="ALL">🏥 All Locations</option>
+                <option value="ALL">Work Station-Less Labs</option>
                 {locations.map(loc => (
-                  <option key={loc.id} value={loc.id}>📍 {loc.name}</option>
+                  <option key={loc.id} value={loc.id}>{loc.name}</option>
                 ))}
               </select>
             </div>
@@ -193,7 +412,7 @@ const WorklistSearch = React.memo(({
             {/* Action Buttons */}
             <div className="flex space-x-2">
               <button 
-                className={`p-2 border rounded-lg transition-all ${
+                className={`px-4 py-2 border rounded-lg transition-all text-sm font-medium ${
                   isExpanded 
                     ? 'bg-blue-500 border-blue-500 text-white shadow-md' 
                     : 'bg-white border-gray-300 text-gray-600 hover:bg-blue-50 hover:border-blue-400'
@@ -201,15 +420,20 @@ const WorklistSearch = React.memo(({
                 onClick={toggleExpanded}
                 title="Advanced Search"
               >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 100 4m0-4v2m0-6V4" />
-                </svg>
+                Advanced
+              </button>
+              
+              <button 
+                onClick={handleClear}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+              >
+                Clear
               </button>
             </div>
           </div>
         </div>
 
-        {/* Advanced Search Panel - Only render when expanded */}
+        {/* Advanced Search Panel */}
         {isExpanded && (
           <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl">
             <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-6 py-4 border-b border-gray-200 rounded-t-xl">
@@ -224,76 +448,237 @@ const WorklistSearch = React.memo(({
             </div>
             
             <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Patient Name */}
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-700">
-                    Patient Name
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-sm placeholder-gray-500 hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-                    value={patientName}
-                    onChange={(e) => setPatientName(e.target.value)}
-                    placeholder="Enter patient name..."
-                  />
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {/* Patient Info Section - remains the same */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
+                    Patient Info
+                  </h3>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Patient ID</label>
+                    <input
+                      type="text"
+                      value={patientId}
+                      onChange={(e) => setPatientId(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <input
+                      type="text"
+                      value={patientName}
+                      onChange={(e) => setPatientName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Ref Name</label>
+                    <input
+                      type="text"
+                      value={refName}
+                      onChange={(e) => setRefName(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
                 </div>
 
-                {/* Patient ID */}
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-700">
-                    Patient ID
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-sm placeholder-gray-500 hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-                    value={patientId}
-                    onChange={(e) => setPatientId(e.target.value)}
-                    placeholder="Enter patient ID..."
-                  />
+                {/* Study Info Section - remains the same */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
+                    Study Info
+                  </h3>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Accession#</label>
+                    <input
+                      type="text"
+                      value={accessionNumber}
+                      onChange={(e) => setAccessionNumber(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <input
+                      type="text"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select
+                      value={workflowStatus}
+                      onChange={(e) => setWorkflowStatus(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="all">All selected</option>
+                      <option value="pending">Pending</option>
+                      <option value="inprogress">In Progress</option>
+                      <option value="completed">Completed</option>
+                    </select>
+                  </div>
                 </div>
 
-                {/* Accession Number */}
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-700">
-                    Accession Number
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-sm placeholder-gray-500 hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-                    value={accessionNumber}
-                    onChange={(e) => setAccessionNumber(e.target.value)}
-                    placeholder="Enter accession number..."
-                  />
-                </div>
+                {/* 🔧 UPDATED: Date Range & Other Filters */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
+                    Date Range
+                  </h3>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Date Type</label>
+                    <select
+                      value={dateType}
+                      onChange={(e) => onDateTypeChange && onDateTypeChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-2"
+                    >
+                      <option value="StudyDate">Study Date</option>
+                      <option value="UploadDate">Upload Date</option>
+                      <option value="DOB">DOB</option>
+                    </select>
+                    
+                    {/* 🔧 UPDATED: Quick Date Presets with backend integration */}
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {['today', 'yesterday', 'thisWeek', 'thisMonth', 'thisYear'].map(preset => (
+                        <button
+                          key={preset}
+                          onClick={() => setDatePreset(preset)}
+                          className={`px-2 py-1 text-xs rounded transition-colors ${
+                            dateFilter === preset 
+                              ? 'bg-blue-500 text-white' 
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          {preset === 'today' ? 'Today' : 
+                           preset === 'yesterday' ? 'Yesterday' :
+                           preset === 'thisWeek' ? 'This Week' : 
+                           preset === 'thisMonth' ? 'This Month' : 'This Year'}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setDatePreset('custom')}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          dateFilter === 'custom' 
+                            ? 'bg-purple-500 text-white' 
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        Custom
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* 🔧 UPDATED: Custom date inputs with backend integration */}
+                  {dateFilter === 'custom' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">From</label>
+                        <input
+                          type="date"
+                          value={customDateFrom}
+                          onChange={(e) => handleCustomDateFromChange(e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">To</label>
+                        <input
+                          type="date"
+                          value={customDateTo}
+                          onChange={(e) => handleCustomDateToChange(e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
 
-                {/* Description */}
-                <div className="space-y-2">
-                  <label className="flex items-center text-sm font-medium text-gray-700">
-                    Study Description
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full bg-white border border-gray-300 rounded-lg px-4 py-3 text-sm placeholder-gray-500 hover:border-blue-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Enter study description..."
-                  />
+                  {/* Modality Checkboxes */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Modality</label>
+                    <div className="grid grid-cols-2 gap-1">
+                      {Object.entries(modalities).map(([modality, checked]) => (
+                        <label key={modality} className="flex items-center text-sm">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => handleModalityChange(modality, e.target.checked)}
+                            className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          {modality}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Emergency & Study Type */}
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <label className="flex items-center text-sm">
+                        <input
+                          type="checkbox"
+                          checked={emergencyCase}
+                          onChange={(e) => setEmergencyCase(e.target.checked)}
+                          className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        Emergency
+                      </label>
+                      <label className="flex items-center text-sm">
+                        <input
+                          type="checkbox"
+                          checked={mlcCase}
+                          onChange={(e) => setMlcCase(e.target.checked)}
+                          className="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        MLC
+                      </label>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Study Type</label>
+                      <select
+                        value={studyType}
+                        onChange={(e) => setStudyType(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="all">None selected</option>
+                        <option value="routine">Routine</option>
+                        <option value="urgent">Urgent</option>
+                        <option value="stat">Stat</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Action Buttons */}
+            {/* 🔧 UPDATED: Action Buttons with backend search */}
             <div className="flex justify-between items-center border-t border-gray-200 p-4 bg-gray-50 rounded-b-xl">
               <div className="text-sm text-gray-600">
-                {hasActiveFilters ? `${filteredStudies.length} studies match your criteria` : 'No filters applied'}
+                {hasActiveFilters ? `${filteredStudies.length} studies found` : 'No filters applied'}
               </div>
               <div className="flex space-x-3">
-                <button onClick={handleClear} className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium">
+                <button
+                  onClick={handleClear}
+                  className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-sm font-medium"
+                >
                   Reset All
                 </button>
-                <button onClick={toggleExpanded} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-all shadow-sm">
-                  Apply Filters
+                <button
+                  onClick={() => {
+                    handleBackendSearch();
+                    toggleExpanded();
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors"
+                >
+                  Search
                 </button>
               </div>
             </div>
@@ -301,24 +686,19 @@ const WorklistSearch = React.memo(({
         )}
       </div>
 
-      {/* Pass filtered data to WorklistTable */}
+      {/* 🔧 UPDATED: Pass only necessary props to WorklistTable */}
       <WorklistTable 
         studies={filteredStudies}
         loading={loading}
-        totalRecords={filteredStudies.length}
-        currentPage={currentPage}
-        totalPages={Math.ceil(filteredStudies.length / 10)}
-        onPageChange={onPageChange}
+        totalRecords={allStudies.length}
+        filteredRecords={filteredStudies.length}
         userRole={userRole}
         onAssignmentComplete={onAssignmentComplete}
+        recordsPerPage={recordsPerPage}
+        onRecordsPerPageChange={onRecordsPerPageChange}
+        usePagination={false}
       />
     </div>
-  );
-}, (prevProps, nextProps) => {
-  return (
-    prevProps.allStudies.length === nextProps.allStudies.length &&
-    prevProps.loading === nextProps.loading &&
-    JSON.stringify(prevProps.allStudies) === JSON.stringify(nextProps.allStudies)
   );
 });
 

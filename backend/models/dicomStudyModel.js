@@ -98,6 +98,17 @@ const DicomStudySchema = new mongoose.Schema({
             index: true
         }
     },
+
+    // 🆕 ADD THIS FIELD - Legacy field for backward compatibility
+    lastAssignedDoctor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Doctor',
+        index: true
+    },
+    lastAssignmentAt: {
+        type: Date,
+        index: true
+    },
     
     // 🔧 OPTIMIZED: Status history with size limit
     statusHistory: [{
@@ -140,7 +151,7 @@ const DicomStudySchema = new mongoose.Schema({
     // 🔧 CRITICAL: Search optimization
     searchText: { type: String, index: 'text' },
     
-    // 🔧 ADDED: Report storage
+   
     uploadedReports: [{
         filename: String,
         contentType: String,
@@ -162,7 +173,85 @@ const DicomStudySchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Doctor'
         }
-    }]
+    }],
+
+    doctorReports:[{
+        filename: String,
+        contentType: String,
+        data: String, // base64 encoded
+        size: Number,
+        reportType: {
+            type: String,
+            enum: ['doctor-report', 'radiologist-report'],
+            default: 'doctor-report'
+        },
+        uploadedAt: { type: Date, default: Date.now },
+        uploadedBy: String,
+        reportStatus: {
+            type: String,
+            enum: ['draft', 'finalized'],
+            default: 'finalized'
+        },
+        doctorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Doctor'
+        }
+    }],
+    
+    // 🆕 NEW: Series and Instance tracking
+    seriesCount: {
+        type: Number,
+        default: 0,
+        index: true
+    },
+    instanceCount: {
+        type: Number,
+        default: 0,
+        index: true
+    },
+    seriesImages: {
+        type: String, // Format: "3/45" (3 series, 45 instances)
+        default: "0/0"
+    },
+    
+    // Missing fields used in orthanc.routes.js:
+    studyTime: { type: String },
+    modalitiesInStudy: [{ type: String }],
+    examDescription: { type: String },
+    institutionName: { type: String },
+    orthancStudyID: { type: String, index: true },
+    
+    // DICOM files storage
+    dicomFiles: [{
+        sopInstanceUID: String,
+        seriesInstanceUID: String,
+        orthancInstanceId: String,
+        modality: String,
+        storageType: { type: String, default: 'orthanc' },
+        uploadedAt: { type: Date, default: Date.now }
+    }],
+    
+    // Case type for priority - 🔧 FIXED: Accept both cases
+    caseType: {
+        type: String,
+        enum: [
+            'routine', 'urgent', 'stat', 'emergency',           // lowercase
+            'ROUTINE', 'URGENT', 'STAT', 'EMERGENCY'           // uppercase
+        ],
+        default: 'routine'
+    },
+    
+    // 🆕 NEW: Add referring physician information
+    referringPhysician: {
+        name: { type: String, trim: true },
+        institution: { type: String, trim: true },
+        contactInfo: { type: String, trim: true }
+    },
+    referringPhysicianName: { 
+        type: String, 
+        trim: true,
+        index: true // For searching by referring physician
+    }
     
 }, { 
     timestamps: true,
@@ -184,6 +273,11 @@ DicomStudySchema.pre('save', function(next) {
     // Limit status history to last 50 entries
     if (this.statusHistory && this.statusHistory.length > 50) {
         this.statusHistory = this.statusHistory.slice(-50);
+    }
+    
+    // 🔧 NEW: Normalize caseType to lowercase
+    if (this.caseType) {
+        this.caseType = this.caseType.toLowerCase();
     }
     
     // Update search text for full-text search

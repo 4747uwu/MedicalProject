@@ -42,6 +42,33 @@ const DoctorSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
     },
+
+    signature: {
+        type: String,
+        trim: true,
+        default: '',
+    },
+    
+    // 🆕 NEW: Enhanced signature storage fields
+    signatureWasabiKey: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+    
+    signatureMetadata: {
+        uploadedAt: Date,
+        fileSize: Number,
+        originalName: String,
+        mimeType: String,
+        lastUpdated: Date
+    },
+    
+    // 🔧 HELPER: Virtual for signature URL generation
+    signaturePresignedUrl: {
+        type: String,
+        default: ''
+    },
     
 
     // Add tracking arrays for assigned and completed studies

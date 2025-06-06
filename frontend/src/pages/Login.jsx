@@ -84,26 +84,16 @@ const LoginPage = () => {
         <div className="w-full max-w-md p-8 relative z-10">
           
           {/* Language & Theme selector */}
-          <div className="absolute top-6 right-8 flex items-center space-x-4">
-            <div className="text-sm text-gray-500 flex items-center">
-              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-              </svg>
-              English(USA)
-              <svg className="ml-1 w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
+          
 
           {/* Enhanced form header */}
           <div className="mb-8 text-center">
             <div className="relative inline-block mb-6">
               <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl blur opacity-75 animate-pulse"></div>
               <div className="relative p-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 shadow-xl">
-                <svg className="w-8 h-8 text-white mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {/* <svg className="w-8 h-8 text-white mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                </svg>
+                </svg> */}
               </div>
             </div>
             <h2 className="text-3xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-2">
@@ -311,14 +301,7 @@ const LoginPage = () => {
           </form>
 
           {/* Enhanced Create account link */}
-          <div className="mt-8 text-center">
-            <p className="text-gray-600 text-sm">
-              Don't have an account?{' '}
-              <Link to="/signup" className="font-semibold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 transition-all duration-200">
-                Create an account
-              </Link>
-            </p>
-          </div>
+          
 
           {/* Enhanced Support contact */}
           <div className="mt-6 pt-6 border-t border-gray-200">

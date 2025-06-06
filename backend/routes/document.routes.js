@@ -1,61 +1,71 @@
 import express from 'express';
-import DocumentController from '../controllers/document.controller.js';
-import { protect, authorize } from '../middleware/authMiddleware.js';
 import multer from 'multer';
+import { protect, authorize } from '../middleware/authMiddleware.js';
+import DocumentController from '../controllers/document.controller.js';
 
 const router = express.Router();
 
-// Configure multer for memory storage (files will be in req.file as buffer)
-const upload = multer({ storage: multer.memoryStorage() });
+// Configure multer for memory storage (Wasabi needs buffer)
+const storage = multer.memoryStorage();
 
-// Generate patient report
-router.get('/patient-report/:studyId', 
-  protect, 
-  authorize('admin', 'doctor_account', 'lab_staff'),
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow common document types
+    const allowedMimes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'text/plain',
+      'image/jpeg',
+      'image/png',
+      'image/gif'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, Word documents, text files, and images are allowed.'));
+    }
+  }
+});
+
+// Apply protection to all routes
+router.use(protect);
+
+// Generate patient report (NO STORAGE - direct download)
+router.get('/study/:studyId/generate-patient-report', 
+  authorize('admin', 'lab_staff', 'doctor_account'),
   DocumentController.generatePatientReport
 );
 
-// Generate lab report
-router.get('/lab-report/:labId', 
-  protect, 
-  authorize('admin', 'doctor_account'),
-  DocumentController.generateLabReport
-);
-
-// Get study reports list
+// Get all reports for a study (metadata only)
 router.get('/study/:studyId/reports', 
-  protect, 
-  authorize('admin', 'doctor_account', 'lab_staff'),
+  authorize('admin', 'lab_staff', 'doctor_account'),
   DocumentController.getStudyReports
 );
 
-// Download specific report
+// Upload report to study with Wasabi storage
+router.post('/study/:studyId/upload', 
+  authorize('admin', 'lab_staff', 'doctor_account'),
+  upload.single('report'), // FIXED: Changed to match frontend
+  DocumentController.uploadStudyReport
+);
+
+// Download specific report by index
 router.get('/study/:studyId/reports/:reportIndex/download', 
-  protect, 
-  authorize('admin', 'doctor_account', 'lab_staff'),
+  authorize('admin', 'lab_staff', 'doctor_account'),
   DocumentController.getStudyReport
 );
 
-// Delete specific report
+// Delete specific report by index
 router.delete('/study/:studyId/reports/:reportIndex', 
-  protect, 
-  authorize('admin', 'doctor_account', 'lab_staff'),
+  authorize('admin', 'lab_staff'),
   DocumentController.deleteStudyReport
-);
-
-// Get available templates
-router.get('/templates', 
-  protect, 
-  authorize('admin'),
-  DocumentController.getAvailableTemplates
-);
-
-// Upload report for study
-router.post('/study/:studyId/upload', 
-  protect,
-  authorize('admin', 'doctor_account'),
-  upload.single('report'),
-  DocumentController.uploadStudyReport
 );
 
 export default router;

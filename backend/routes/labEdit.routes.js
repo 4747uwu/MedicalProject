@@ -1,57 +1,143 @@
 import express from 'express';
 import { 
+  getPatientDetailedView,
   updatePatientDetails,
-  // uploadPatientDocument, 
-  // downloadPatientDocument,
-  
-} from '../controllers/labEdit.controller.js'; // Changed from lab.controller.js to labEdit.controller.js
+  uploadDocument,
+  deleteDocument,
+  downloadDocument,
+  getDocumentDownloadUrl,
+  getPatientDocuments,
+  updateStudyStatus,
+  getAllPatients,
+  bulkUpdateStudies,
+  downloadStudyReport // 🔧 NEW: Import the downloadStudyReport controller
+} from '../controllers/labEdit.controller.js';
 import { protect, authorize } from '../middleware/authMiddleware.js';
 import multer from 'multer';
 import path from 'path';
 
 const router = express.Router();
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/documents/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+// 🔧 FIXED: Configure multer for memory storage (Wasabi needs buffer)
+const storage = multer.memoryStorage(); // Changed from diskStorage
 
 const upload = multer({ 
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { 
+    fileSize: 10 * 1024 * 1024, // 10MB limit for documents
+    files: 1 // Single file upload
+  },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|txt/;
+    console.log(`🔍 File filter - Original name: ${file.originalname}, MIME type: ${file.mimetype}`);
+    
+    // Allowed file types for medical documents
+    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|txt|xml|json|csv|xlsx|xls|rtf|tiff|bmp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+    const mimetype = allowedTypes.test(file.mimetype) || 
+                     file.mimetype.includes('application/') || 
+                     file.mimetype.includes('text/') ||
+                     file.mimetype.includes('image/');
     
     if (extname && mimetype) {
+      console.log(`✅ File accepted: ${file.originalname}`);
       return cb(null, true);
     } else {
-      cb('Error: Only image and document files are allowed');
+      console.log(`❌ File rejected: ${file.originalname} - Type: ${file.mimetype}`);
+      cb(new Error('Only document and image files are allowed (PDF, DOC, DOCX, JPG, PNG, etc.)'));
     }
   }
 });
-
-// All routes require authentication and lab_staff role
 router.use(protect);
-router.use(authorize('lab_staff'));
 
-// Update patient details (lab staff only)
-router.put('/patients/:patientId', updatePatientDetails);
+// 🔧 DEBUG: Add logging middleware
+router.use((req, res, next) => {
+  console.log(`🔍 [labEdit] ${req.method} ${req.path}`);
+  console.log(`🔍 [labEdit] User:`, req.user ? {
+    id: req.user.id || req.user._id,
+    role: req.user.role,
+    email: req.user.email
+  } : 'No user');
+  next();
+});
 
-// Upload document for patient (with file upload middleware)
-// router.post('/patients/:patientId/documents', upload.single('file'), uploadPatientDocument);
+// All routes require authentication
 
-// // Download patient document
-// router.get('/patients/:patientId/documents/:documentIndex/download', downloadPatientDocument);
+// 🔧 STUDY REPORT DOWNLOAD - MUST BE FIRST
+router.get('/studies/:studyId/reports/:reportId/download', 
+  authorize('lab_staff', 'admin', 'doctor_account'),
+  downloadStudyReport
+);
 
-// Delete patient document
-// router.delete('/patients/:patientId/documents/:documentIndex', deletePatientDocument);
+// 🔧 PATIENT DOCUMENT MANAGEMENT (comes after study routes)
+
+// Get patient documents list
+router.get('/patients/:patientId/documents', 
+  authorize('lab_staff', 'admin', 'doctor_account'), 
+  getPatientDocuments
+);
+
+// Upload document for patient (Lab Staff + Admin only)
+router.post('/patients/:patientId/documents', 
+  authorize('lab_staff', 'admin'),
+  (req, res, next) => {
+    console.log(`🔍 Upload middleware - User: ${req.user?.role}, Patient: ${req.params.patientId}`);
+    next();
+  },
+  upload.single('file'), 
+  uploadDocument
+);
+
+// Get presigned download URL (for web apps)
+router.get('/patients/:patientId/documents/:docIndex/url',
+  authorize('lab_staff', 'admin', 'doctor_account'),
+  getDocumentDownloadUrl
+);
+
+// Direct download endpoint
+router.get('/patients/:patientId/documents/:docIndex/download', 
+  authorize('lab_staff', 'admin', 'doctor_account'),
+  downloadDocument
+);
+
+// Delete patient document (Lab Staff + Admin only)
+router.delete('/patients/:patientId/documents/:docIndex', 
+  authorize('lab_staff', 'admin'),
+  deleteDocument
+);
+
+// 🔧 PATIENT MANAGEMENT (Lab Staff + Admin)
+
+// Get detailed patient view
+router.get('/patients/:patientId', 
+  authorize('lab_staff', 'admin'),
+  getPatientDetailedView
+);
+
+// Update patient details
+router.put('/patients/:patientId', 
+  authorize('lab_staff', 'admin'),
+  updatePatientDetails
+);
+
+// Get all patients (lab view)
+router.get('/patients', 
+  authorize('lab_staff', 'admin'),
+  getAllPatients
+);
+
+// 🔧 STUDY WORKFLOW MANAGEMENT (Lab Staff + Admin)
+
+// Update study workflow status
+router.put('/studies/:studyId/status', 
+  authorize('lab_staff', 'admin'),
+  updateStudyStatus
+);
+
+// Bulk update studies
+router.put('/studies/bulk-update', 
+  authorize('lab_staff', 'admin'),
+  bulkUpdateStudies
+);
+
 
 export default router;

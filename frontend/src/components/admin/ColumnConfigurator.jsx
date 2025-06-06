@@ -23,28 +23,28 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
   }, [isOpen]);
 
   const columnOptions = [
-    { key: 'checkbox', label: 'Select All' },
-    { key: 'status', label: 'Status' },
-    { key: 'randomEmoji', label: 'Series Tree' },
-    { key: 'user', label: 'User Info' },
-    { key: 'downloadBtn', label: 'Download' },
-    { key: 'discussion', label: 'Discussion' },
-    { key: 'patientId', label: 'Patient ID' },
-    { key: 'patientName', label: 'Patient Name' },
-    { key: 'ageGender', label: 'Age/Gender' },
-    { key: 'description', label: 'Description' },
-    { key: 'series', label: 'Series Count' },
-    { key: 'modality', label: 'Modality' },
-    { key: 'location', label: 'Location' },
-    { key: 'studyDate', label: 'Study Date' },
-    { key: 'uploadDate', label: 'Upload Date' },
-    { key: 'reportedDate', label: 'Reported Date' },
-    { key: 'reportedBy', label: 'Reported By' },
-    { key: 'accession', label: 'Accession' },
-    { key: 'seenBy', label: 'Seen By' },
-    { key: 'actions', label: 'Actions' },
-    { key: 'report', label: 'Report' },
-    { key: 'assignDoctor', label: 'Assign Doctor' }
+    { key: 'checkbox', label: 'Select All', defaultVisible: true },
+    { key: 'status', label: 'Status', defaultVisible: true },
+    { key: 'randomEmoji', label: 'Series Tree', defaultVisible: true },
+    { key: 'user', label: 'User Info', defaultVisible: true },
+    { key: 'downloadBtn', label: 'Download', defaultVisible: true },
+    { key: 'discussion', label: 'Discussion', defaultVisible: true },
+    { key: 'patientId', label: 'Patient ID', defaultVisible: true },
+    { key: 'patientName', label: 'Patient Name', defaultVisible: true },
+    { key: 'ageGender', label: 'Age/Gender', defaultVisible: true },
+    { key: 'description', label: 'Description', defaultVisible: true },
+    { key: 'series', label: 'Series Count', defaultVisible: true },
+    { key: 'modality', label: 'Modality', defaultVisible: true },
+    { key: 'location', label: 'Location', defaultVisible: true },
+    { key: 'studyDate', label: 'Study Date', defaultVisible: true },
+    { key: 'uploadDate', label: 'Upload Date', defaultVisible: false }, // 🔧 HIDDEN by default
+    { key: 'reportedDate', label: 'Reported Date', defaultVisible: true },
+    { key: 'reportedBy', label: 'Reported By', defaultVisible: false }, // 🔧 HIDDEN by default
+    { key: 'accession', label: 'Accession', defaultVisible: false }, // 🔧 HIDDEN by default
+    { key: 'seenBy', label: 'Seen By', defaultVisible: false }, // 🔧 HIDDEN by default
+    { key: 'actions', label: 'Actions', defaultVisible: true },
+    { key: 'report', label: 'Report', defaultVisible: true },
+    { key: 'assignDoctor', label: 'Assign Doctor', defaultVisible: true }
   ];
 
   const handleToggleColumn = (columnKey) => {
@@ -79,8 +79,19 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
     });
   };
 
+  // 🆕 NEW: Reset to Default function
+  const handleResetToDefault = () => {
+    columnOptions.forEach(col => {
+      onColumnChange(col.key, col.defaultVisible);
+    });
+  };
+
   const getVisibleCount = () => {
     return columnOptions.filter(col => visibleColumns[col.key]).length;
+  };
+
+  const getDefaultCount = () => {
+    return columnOptions.filter(col => col.defaultVisible).length;
   };
 
   return (
@@ -137,6 +148,14 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
               >
                 Hide Optional
               </button>
+              {/* 🆕 NEW: Reset to Default button */}
+              <button
+                onClick={handleResetToDefault}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                title={`Reset to default (${getDefaultCount()} columns)`}
+              >
+                Reset Default
+              </button>
             </div>
           </div>
 
@@ -145,13 +164,14 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
             {columnOptions.map((column) => {
               const isEssential = ['patientId', 'patientName', 'status'].includes(column.key);
               const isVisible = visibleColumns[column.key];
+              const isDefault = column.defaultVisible;
               
               return (
                 <div
                   key={column.key}
                   className={`flex items-center justify-between px-4 py-2 hover:bg-gray-50 cursor-pointer ${
                     isEssential ? 'bg-blue-50' : ''
-                  }`}
+                  } ${!isDefault ? 'bg-gray-25' : ''}`}
                   onClick={() => handleToggleColumn(column.key)}
                 >
                   <div className="flex items-center space-x-3">
@@ -168,16 +188,23 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
                       )}
                     </div>
                     
-                    <span className={`text-sm ${isEssential ? 'font-medium text-blue-700' : 'text-gray-700'}`}>
+                    <span className={`text-sm ${isEssential ? 'font-medium text-blue-700' : 'text-gray-700'} ${!isDefault ? 'italic' : ''}`}>
                       {column.label}
                     </span>
                   </div>
                   
-                  {isEssential && (
-                    <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-                      Required
-                    </span>
-                  )}
+                  <div className="flex items-center space-x-2">
+                    {!isDefault && (
+                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                        Hidden by default
+                      </span>
+                    )}
+                    {isEssential && (
+                      <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                        Required
+                      </span>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -186,7 +213,7 @@ const ColumnConfigurator = ({ visibleColumns, onColumnChange }) => {
           {/* Footer */}
           <div className="px-4 py-3 border-t border-gray-200 bg-gray-50">
             <p className="text-xs text-gray-600">
-              {getVisibleCount()} of {columnOptions.length} columns visible
+              {getVisibleCount()} of {columnOptions.length} columns visible • Default: {getDefaultCount()} columns
             </p>
           </div>
         </div>
