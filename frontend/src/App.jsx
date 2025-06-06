@@ -16,6 +16,7 @@ import ForgotPasswordPage from './pages/ForgotPassword';
 import ManageDoctorsPage from './pages/ManageDoctorsPage';
 import TATReportPage from './pages/TATReport';
 import { WebSocketProvider } from './contexts/WebSocketContext';
+import ShareStudy from './pages/ShareStudy';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { currentUser, loading } = useAuth();
@@ -135,9 +136,11 @@ function App() {
                 </ProtectedRoute>
               } 
             />
+            <Route path="/share/:token" element={<ShareStudy />} />
             
             {/* Catch-all route */}
             <Route path="*" element={<Navigate to="/login" replace />} />
+
           </Routes>
         </div>
 

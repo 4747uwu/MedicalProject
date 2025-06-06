@@ -6,6 +6,7 @@ import api from '../../services/api';
 import useAdminWebSocket from '../../hooks/useAdminWebSocket';
 import { useAuth } from '../../hooks/useAuth';
 
+// 🔧 FIXED: Dashboard.jsx - Add missing paginationMeta state
 const AdminDashboard = React.memo(() => {
   const { currentUser } = useAuth();
   const stableUser = useMemo(() => currentUser, [currentUser?.id, currentUser?.role]);
@@ -14,18 +15,29 @@ const AdminDashboard = React.memo(() => {
 
   const [allStudies, setAllStudies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
   const [activeCategory, setActiveCategory] = useState('all');
   
-  // 🔧 SIMPLIFIED: Single page mode state management
+  // 🆕 CENTRALIZED: All pagination state here
   const [recordsPerPage, setRecordsPerPage] = useState(20);
-  const [totalRecords, setTotalRecords] = useState(0);
+  const [usePagination, setUsePagination] = useState(true);
   
-  // 🆕 NEW: Date filter state for backend integration
-  const [dateFilter, setDateFilter] = useState('last24h'); // Default to 24 hours
-  const [customDateFrom, setCustomDateFrom] = useState('');
-  const [customDateTo, setCustomDateTo] = useState('');
-  const [dateType, setDateType] = useState('UploadDate'); // StudyDate, UploadDate
-  
+  // 🔧 FIXED: Add missing paginationMeta state
+  const [paginationMeta, setPaginationMeta] = useState({
+    currentPage: 1,
+    totalPages: 1,
+    totalRecords: 0,
+    limit: 20,
+    hasNextPage: false,
+    hasPrevPage: false,
+    recordRange: {
+      start: 1,
+      end: 0
+    }
+  });
+
   const [dashboardStats, setDashboardStats] = useState({
     totalStudies: 0,
     pendingStudies: 0,
@@ -34,50 +46,50 @@ const AdminDashboard = React.memo(() => {
     activeLabs: 0,
     activeDoctors: 0
   });
-  
   const intervalRef = useRef(null);
 
-  // 🔧 ENHANCED: Fetch studies with date filters
-  const fetchStudies = useCallback(async (searchParams = {}) => {
+  // 🔧 ENHANCED: Fetch studies with pagination detection
+  const fetchStudies = useCallback(async () => {
     try {
       setLoading(true);
-      console.log(`🔄 Fetching studies with limit: ${recordsPerPage}, category: ${activeCategory}, dateFilter: ${dateFilter}`);
-      
-      // 🆕 NEW: Build API parameters including date filters
-      const apiParams = {
-        limit: recordsPerPage,
-        category: activeCategory !== 'all' ? activeCategory : undefined,
-        dateType: dateType,
-        ...searchParams // Allow override from WorklistSearch
-      };
-
-      // Add date filter parameters
-      if (dateFilter === 'custom') {
-        if (customDateFrom) apiParams.customDateFrom = customDateFrom;
-        if (customDateTo) apiParams.customDateTo = customDateTo;
-        apiParams.quickDatePreset = 'custom';
-      } else if (dateFilter && dateFilter !== 'all') {
-        apiParams.quickDatePreset = dateFilter;
-      }
-      
-      // Remove undefined values
-      Object.keys(apiParams).forEach(key => 
-        apiParams[key] === undefined && delete apiParams[key]
-      );
-
-      console.log('📤 API Parameters:', apiParams);
+      console.log(`🔄 Fetching studies with page: ${currentPage}, limit: ${recordsPerPage}, category: ${activeCategory}`);
       
       const response = await api.get('/admin/studies', {
-        params: apiParams
+        params: {
+          page: currentPage,
+          limit: recordsPerPage,
+          category: activeCategory !== 'all' ? activeCategory : undefined,
+        }
       });
-      
-      console.log('📊 Studies response:', response.data);
       
       if (response.data.success) {
         setAllStudies(response.data.data);
+        setTotalPages(response.data.totalPages);
         setTotalRecords(response.data.totalRecords);
         
-        // Update dashboard stats from backend response
+        // 🆕 NEW: Set pagination mode from backend response
+        setUsePagination(response.data.usePagination !== false);
+        
+        // 🔧 FIXED: Set pagination metadata with fallback
+        if (response.data.pagination) {
+          setPaginationMeta(response.data.pagination);
+        } else {
+          // 🔧 FALLBACK: Create pagination meta from response data
+          setPaginationMeta({
+            currentPage: response.data.currentPage || currentPage,
+            totalPages: response.data.totalPages || 1,
+            totalRecords: response.data.totalRecords || 0,
+            limit: recordsPerPage,
+            hasNextPage: (response.data.currentPage || currentPage) < (response.data.totalPages || 1),
+            hasPrevPage: (response.data.currentPage || currentPage) > 1,
+            recordRange: {
+              start: response.data.data.length > 0 ? ((response.data.currentPage || currentPage) - 1) * recordsPerPage + 1 : 0,
+              end: Math.min((response.data.currentPage || currentPage) * recordsPerPage, response.data.totalRecords || 0)
+            }
+          });
+        }
+        
+        // Use backend-provided category counts or calculate from data
         if (response.data.summary?.byCategory) {
           setDashboardStats({
             totalStudies: response.data.summary.byCategory.all || response.data.totalRecords,
@@ -89,57 +101,50 @@ const AdminDashboard = React.memo(() => {
             activeDoctors: response.data.summary.activeDoctors || 
                            [...new Set(response.data.data.map(s => s.lastAssignedDoctor?._id).filter(Boolean))].length
           });
+        } else {
+          // 🔧 FALLBACK: Calculate stats from current data
+          const currentData = response.data.data || [];
+          setDashboardStats({
+            totalStudies: response.data.totalRecords || 0,
+            pendingStudies: currentData.filter(s => s.currentCategory === 'pending').length,
+            inProgressStudies: currentData.filter(s => s.currentCategory === 'inprogress').length,
+            completedStudies: currentData.filter(s => s.currentCategory === 'completed').length,
+            activeLabs: [...new Set(currentData.map(s => s.sourceLab?._id).filter(Boolean))].length,
+            activeDoctors: [...new Set(currentData.map(s => s.lastAssignedDoctor?._id).filter(Boolean))].length
+          });
         }
         
         console.log('✅ Studies fetched successfully:', {
           count: response.data.data.length,
           totalRecords: response.data.totalRecords,
-          dateFilter: dateFilter,
-          isSinglePage: response.data.pagination?.isSinglePage || true
+          usePagination: response.data.usePagination !== false,
+          paginationMeta: response.data.pagination || 'fallback used'
         });
       }
     } catch (error) {
       console.error('❌ Error fetching studies:', error);
+      // 🔧 ERROR HANDLING: Set safe defaults
       setAllStudies([]);
+      setTotalPages(1);
       setTotalRecords(0);
+      setPaginationMeta({
+        currentPage: 1,
+        totalPages: 1,
+        totalRecords: 0,
+        limit: recordsPerPage,
+        hasNextPage: false,
+        hasPrevPage: false,
+        recordRange: { start: 0, end: 0 }
+      });
     } finally {
       setLoading(false);
     }
-  }, [activeCategory, recordsPerPage, dateFilter, customDateFrom, customDateTo, dateType]);
+  }, [currentPage, activeCategory, recordsPerPage]);
 
   // Initial fetch when component mounts or dependencies change
   useEffect(() => {
-    console.log(`🔄 useEffect triggered - Records: ${recordsPerPage}, Category: ${activeCategory}, DateFilter: ${dateFilter}`);
+    console.log(`🔄 useEffect triggered - Page: ${currentPage}, Records: ${recordsPerPage}, Category: ${activeCategory}`);
     fetchStudies();
-  }, [fetchStudies]);
-
-  // 🆕 NEW: Date filter handlers
-  const handleDateFilterChange = useCallback((newDateFilter) => {
-    console.log(`📅 DASHBOARD: Changing date filter to ${newDateFilter}`);
-    setDateFilter(newDateFilter);
-    resetNewStudyCount();
-  }, [resetNewStudyCount]);
-
-  const handleCustomDateChange = useCallback((from, to) => {
-    console.log(`📅 DASHBOARD: Setting custom date range from ${from} to ${to}`);
-    setCustomDateFrom(from);
-    setCustomDateTo(to);
-    if (from || to) {
-      setDateFilter('custom');
-    }
-    resetNewStudyCount();
-  }, [resetNewStudyCount]);
-
-  const handleDateTypeChange = useCallback((newDateType) => {
-    console.log(`📅 DASHBOARD: Changing date type to ${newDateType}`);
-    setDateType(newDateType);
-    resetNewStudyCount();
-  }, [resetNewStudyCount]);
-
-  // 🆕 NEW: Handle search with backend parameters
-  const handleSearchWithBackend = useCallback((searchParams) => {
-    console.log('🔍 DASHBOARD: Handling search with backend params:', searchParams);
-    fetchStudies(searchParams);
   }, [fetchStudies]);
 
   // Auto-refresh setup
@@ -156,10 +161,35 @@ const AdminDashboard = React.memo(() => {
     };
   }, [fetchStudies]);
 
-  // 🔧 SIMPLIFIED: Handle records per page change (no pagination)
+  // 🔧 ENHANCED: Handle page change with pagination check
+  const handlePageChange = useCallback((page) => {
+    if (!usePagination) {
+      console.log('📄 Page change ignored - pagination disabled for high record count');
+      return;
+    }
+    
+    if (page >= 1 && page <= totalPages && page !== currentPage && !loading) {
+      console.log(`📄 Navigating to page ${page}`);
+      setCurrentPage(page);
+      resetNewStudyCount();
+    }
+  }, [totalPages, currentPage, loading, resetNewStudyCount, usePagination]);
+
+  // 🔧 ENHANCED: Handle records per page change with pagination mode detection
   const handleRecordsPerPageChange = useCallback((newRecordsPerPage) => {
     console.log(`📊 DASHBOARD: Changing records per page from ${recordsPerPage} to ${newRecordsPerPage}`);
+    
     setRecordsPerPage(newRecordsPerPage);
+    
+    // 🆕 NEW: Set pagination mode based on record count
+    if (newRecordsPerPage <= 100) {
+      setCurrentPage(1);
+      setUsePagination(true);
+    } else {
+      setUsePagination(false);
+      setCurrentPage(1);
+    }
+    
     resetNewStudyCount();
   }, [recordsPerPage, resetNewStudyCount]);
 
@@ -181,6 +211,7 @@ const AdminDashboard = React.memo(() => {
   const handleCategoryChange = useCallback((category) => {
     console.log(`🏷️ Changing category to: ${category}`);
     setActiveCategory(category);
+    setCurrentPage(1); // Reset to first page
     resetNewStudyCount();
   }, [resetNewStudyCount]);
 
@@ -227,18 +258,14 @@ const AdminDashboard = React.memo(() => {
               <div className="flex items-center space-x-4 mt-1">
                 <span className="text-sm text-gray-600">{totalRecords} total studies</span>
                 <span className="text-sm text-gray-500">
-                  ({recordsPerPage} per page - Single page mode)
+                  ({recordsPerPage} per page{!usePagination ? ' - Single page mode' : ''})
                 </span>
-                {/* 🆕 NEW: Date filter indicator */}
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                  📅 {dateFilter === 'custom' 
-                    ? `Custom: ${customDateFrom || 'start'} - ${customDateTo || 'end'}` 
-                    : dateFilter === 'last24h' ? 'Last 24 hours' 
-                    : dateFilter}
-                </span>
-                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
-                  📜 All records loaded
-                </span>
+                {/* 🆕 NEW: Show pagination mode indicator */}
+                {!usePagination && (
+                  <span className="text-xs bg-orange-100 text-orange-800 px-2 py-1 rounded-full">
+                    📜 All records loaded
+                  </span>
+                )}
                 <div className="flex items-center space-x-1">
                   <div className={`w-2 h-2 rounded-full ${statusDisplay.color}`}></div>
                   <span className={`text-xs ${statusDisplay.textColor}`}>{statusDisplay.text}</span>
@@ -251,36 +278,28 @@ const AdminDashboard = React.memo(() => {
               </div>
             </div>
 
-            {/* Quick Date Filter Controls */}
             <div className="flex items-center space-x-3">
-              {/* Quick date filter buttons */}
-              <div className="flex items-center space-x-1 bg-white rounded-lg border border-gray-200 p-1">
-                {['last24h', 'today', 'yesterday', 'thisWeek', 'thisMonth'].map(filter => (
-                  <button
-                    key={filter}
-                    onClick={() => handleDateFilterChange(filter)}
-                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                      dateFilter === filter 
-                        ? 'bg-blue-500 text-white' 
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {filter === 'last24h' ? '24h' : 
-                     filter === 'today' ? 'Today' :
-                     filter === 'yesterday' ? 'Yesterday' :
-                     filter === 'thisWeek' ? 'Week' : 'Month'}
-                  </button>
-                ))}
-                <button
-                  onClick={() => handleDateFilterChange('custom')}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    dateFilter === 'custom' 
-                      ? 'bg-purple-500 text-white' 
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  Custom
-                </button>
+              {/* Quick Stats */}
+              <div className="hidden md:flex items-center space-x-4 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-blue-600">{dashboardStats.pendingStudies}</div>
+                  <div className="text-xs text-gray-500">Pending</div>
+                </div>
+                <div className="w-px h-8 bg-gray-200"></div>
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-orange-600">{dashboardStats.inProgressStudies}</div>
+                  <div className="text-xs text-gray-500">In Progress</div>
+                </div>
+                <div className="w-px h-8 bg-gray-200"></div>
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-green-600">{dashboardStats.completedStudies}</div>
+                  <div className="text-xs text-gray-500">Completed</div>
+                </div>
+                <div className="w-px h-8 bg-gray-200"></div>
+                <div className="text-center">
+                  <div className="text-lg font-semibold text-purple-600">{dashboardStats.activeLabs}</div>
+                  <div className="text-xs text-gray-500">Labs</div>
+                </div>
               </div>
 
               {/* Action Buttons */}
@@ -321,23 +340,19 @@ const AdminDashboard = React.memo(() => {
               allStudies={allStudies}
               loading={loading}
               totalRecords={totalRecords}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
               userRole="admin"
               onAssignmentComplete={handleAssignmentComplete}
               onView={handleWorklistView}
               activeCategory={activeCategory}
               onCategoryChange={handleCategoryChange}
               categoryStats={dashboardStats}
+              paginationMeta={paginationMeta} // 🔧 FIXED: Now properly defined
               recordsPerPage={recordsPerPage}
               onRecordsPerPageChange={handleRecordsPerPageChange}
-              // 🆕 NEW: Pass date filter props
-              dateFilter={dateFilter}
-              onDateFilterChange={handleDateFilterChange}
-              customDateFrom={customDateFrom}
-              customDateTo={customDateTo}
-              onCustomDateChange={handleCustomDateChange}
-              dateType={dateType}
-              onDateTypeChange={handleDateTypeChange}
-              onSearchWithBackend={handleSearchWithBackend}
+              usePagination={usePagination}
             />
           </div>
         </div>

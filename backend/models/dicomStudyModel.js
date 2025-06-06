@@ -151,7 +151,7 @@ const DicomStudySchema = new mongoose.Schema({
     // 🔧 CRITICAL: Search optimization
     searchText: { type: String, index: 'text' },
     
-    // 🔧 ADDED: Report storage
+   
     uploadedReports: [{
         filename: String,
         contentType: String,
@@ -161,6 +161,29 @@ const DicomStudySchema = new mongoose.Schema({
             type: String,
             enum: ['uploaded-report', 'generated-template'],
             default: 'uploaded-report'
+        },
+        uploadedAt: { type: Date, default: Date.now },
+        uploadedBy: String,
+        reportStatus: {
+            type: String,
+            enum: ['draft', 'finalized'],
+            default: 'finalized'
+        },
+        doctorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Doctor'
+        }
+    }],
+
+    doctorReports:[{
+        filename: String,
+        contentType: String,
+        data: String, // base64 encoded
+        size: Number,
+        reportType: {
+            type: String,
+            enum: ['doctor-report', 'radiologist-report'],
+            default: 'doctor-report'
         },
         uploadedAt: { type: Date, default: Date.now },
         uploadedBy: String,
@@ -208,11 +231,26 @@ const DicomStudySchema = new mongoose.Schema({
         uploadedAt: { type: Date, default: Date.now }
     }],
     
-    // Case type for priority
+    // Case type for priority - 🔧 FIXED: Accept both cases
     caseType: {
         type: String,
-        enum: ['routine', 'urgent', 'stat', 'emergency'],
+        enum: [
+            'routine', 'urgent', 'stat', 'emergency',           // lowercase
+            'ROUTINE', 'URGENT', 'STAT', 'EMERGENCY'           // uppercase
+        ],
         default: 'routine'
+    },
+    
+    // 🆕 NEW: Add referring physician information
+    referringPhysician: {
+        name: { type: String, trim: true },
+        institution: { type: String, trim: true },
+        contactInfo: { type: String, trim: true }
+    },
+    referringPhysicianName: { 
+        type: String, 
+        trim: true,
+        index: true // For searching by referring physician
     }
     
 }, { 
@@ -235,6 +273,11 @@ DicomStudySchema.pre('save', function(next) {
     // Limit status history to last 50 entries
     if (this.statusHistory && this.statusHistory.length > 50) {
         this.statusHistory = this.statusHistory.slice(-50);
+    }
+    
+    // 🔧 NEW: Normalize caseType to lowercase
+    if (this.caseType) {
+        this.caseType = this.caseType.toLowerCase();
     }
     
     // Update search text for full-text search

@@ -45,7 +45,7 @@ const ReportModal = ({ isOpen, onClose, studyData }) => {
     
     setGenerating(true);
     try {
-      const response = await api.get(`/documents/patient-report/${studyData._id}`, {
+      const response = await api.get(`/documents/study/${studyData._id}/generate-patient-report`, {
         responseType: 'blob'
       });
       
@@ -131,21 +131,45 @@ const ReportModal = ({ isOpen, onClose, studyData }) => {
       const link = document.createElement('a');
       link.href = url;
       
+      // 🔧 SIMPLIFIED: More robust filename extraction
+      let filename = `report_${reportIndex}_${Date.now()}.pdf`; // Safe fallback
+      
       const contentDisposition = response.headers['content-disposition'];
-      let filename = `Report_${reportIndex}_${Date.now()}.docx`;
+      console.log('🔍 Content-Disposition:', contentDisposition);
       
       if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
+        // Try multiple extraction methods
+        const patterns = [
+          /filename\*?=['"]?([^'";]+)['"]?/i,  // Most comprehensive
+          /filename="([^"]+)"/i,               // Standard quoted
+          /filename=([^;,]+)/i                 // Unquoted
+        ];
+        
+        for (const pattern of patterns) {
+          const match = contentDisposition.match(pattern);
+          if (match && match[1]) {
+            filename = match[1].trim().replace(/['"]/g, '');
+            console.log('✅ Extracted filename:', filename);
+            break;
+          }
         }
       }
+      
+      // 🔧 SAFETY: Ensure filename has a valid extension
+      if (!filename.includes('.')) {
+        filename += '.pdf'; // Default to PDF if no extension
+      }
+      
+      console.log('📁 Final download filename:', filename);
       
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+      
+      console.log('✅ Downloaded file:', filename);
+      
     } catch (error) {
       console.error("Error downloading report:", error);
       toast.error("Failed to download report");

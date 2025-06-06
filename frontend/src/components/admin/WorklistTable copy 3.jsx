@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import toast from 'react-hot-toast';
+import { Link } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import api from '../../services/api';
 import { 
   formatDate,
@@ -17,12 +18,11 @@ import OpenOHIFViewerButton from './ohifViewerButton';
 import { useAuth } from '../../hooks/useAuth';
 import ReportButton from './ReportButton';
 import ColumnConfigurator from './ColumnConfigurator';
-import PatientReport from './patients/PatientDetail';
+import PatientReport  from './patients/PatientDetail';
 import DiscussionButton from './patients/DiscussionButton';
 import StudySeries from './patients/StudySeries';
 import StatusLegend from './StatusLegend';
 import DropdownPagination from './DropdownPagination';
-import ShareButton from './ShareButton';
 
 // Status dot component to indicate workflow status
 const StatusDot = React.memo(({ status, priority }) => {
@@ -84,7 +84,10 @@ const StatusDot = React.memo(({ status, priority }) => {
   
   if (showEmergencyIcon) {
     return (
-      <div className="relative flex items-center justify-center" title={tooltipText}>
+      <div 
+        className="relative flex items-center justify-center"
+        title={tooltipText}
+      >
         <svg width="24" height="24" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <radialGradient id="greenGrad" cx="50%" cy="50%" r="50%">
@@ -101,7 +104,10 @@ const StatusDot = React.memo(({ status, priority }) => {
   }
   
   return (
-    <div className="relative flex items-center justify-center" title={tooltipText}>
+    <div 
+      className="relative flex items-center justify-center"
+      title={tooltipText}
+    >
       <div className={`w-3 h-3 rounded-full ${color}`} />
     </div>
   );
@@ -173,7 +179,7 @@ const DownloadDropdown = ({ study }) => {
     
     ohifUrl.searchParams.set('dataSources', JSON.stringify([dataSourceConfig]));
     
-    console.log('Opening local OHIF Viewer:', ohifUrl.toString());
+    console.log('🏠 Opening local OHIF Viewer:', ohifUrl.toString());
     window.open(ohifUrl.toString(), '_blank');
     setIsOpen(false);
   };
@@ -193,7 +199,7 @@ const DownloadDropdown = ({ study }) => {
     const studyInstanceUID = study.studyInstanceUID || study.instanceID;
     const stoneUrl = `${orthancBaseURL}/stone-webviewer/index.html?study=${studyInstanceUID}`;
     
-    console.log('Opening Stone Web Viewer:', stoneUrl);
+    console.log('🗿 Opening Stone Web Viewer:', stoneUrl);
     window.open(stoneUrl, '_blank');
     setIsOpen(false);
   };
@@ -454,7 +460,7 @@ const DownloadDropdown = ({ study }) => {
                 onClick={handleOpenStoneViewer}
                 className="flex items-center w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors border-b border-gray-200"
               >
-                <span className="text-lg mr-2"></span>
+                <span className="text-lg mr-2">🗿</span>
                 <div className="text-left">
                   <div className="font-medium">Stone Web Viewer</div>
                   <div className="text-xs text-gray-500">Orthanc built-in viewer</div>
@@ -506,34 +512,29 @@ const DownloadDropdown = ({ study }) => {
 };
 
 // 🔧 NEW: Eye Icon Dropdown with Multiple Viewers
-// 🔧 FIXED: EyeIconDropdown with Orthanc Authentication
 const EyeIconDropdown = React.memo(({ studyInstanceUID }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   const viewers = [
     {
       name: 'OHIF Viewer (Local)',
+      icon: '🏠',
       description: 'Self-hosted OHIF viewer',
       action: () => openOHIFLocal(studyInstanceUID),
-      color: 'blue',
-      icon: '🏠'
+      color: 'blue'
     },
     {
       name: 'Stone Web Viewer',
+      icon: '🗿', 
       description: 'Orthanc built-in viewer',
       action: () => openStoneViewer(studyInstanceUID),
-      color: 'gray',
-      icon: '🗿'
+      color: 'gray'
     }
   ];
 
   const openOHIFLocal = useCallback((studyInstanceUID) => {
     const ohifBaseURL = import.meta.env.VITE_OHIF_LOCAL_URL || 'http://localhost:4000';
     const orthancBaseURL = import.meta.env.VITE_ORTHANC_URL || 'http://localhost:8042';
-    
-    // 🔐 FIXED: Add Orthanc credentials
-    const orthancUsername = 'alice';
-    const orthancPassword = 'alicePassword';
     
     const ohifUrl = new URL(`${ohifBaseURL}/viewer`);
     ohifUrl.searchParams.set('StudyInstanceUIDs', studyInstanceUID);
@@ -553,40 +554,22 @@ const EyeIconDropdown = React.memo(({ studyInstanceUID }) => {
         thumbnailRendering: 'wadors',
         enableStudyLazyLoad: true,
         supportsFuzzyMatching: false,
-        supportsWildcard: true,
-        // 🔐 NEW: Add authentication headers
-        headers: {
-          'Authorization': `Basic ${btoa(`${orthancUsername}:${orthancPassword}`)}`
-        },
-        // 🔐 NEW: Add request options for authentication
-        requestOptions: {
-          auth: `${orthancUsername}:${orthancPassword}`,
-          headers: {
-            'Authorization': `Basic ${btoa(`${orthancUsername}:${orthancPassword}`)}`
-          }
-        }
+        supportsWildcard: true
       }
     };
     
     ohifUrl.searchParams.set('dataSources', JSON.stringify([dataSourceConfig]));
     
-    console.log('🏠 Opening local OHIF Viewer with authentication:', ohifUrl.toString());
+    console.log('🏠 Opening local OHIF Viewer:', ohifUrl.toString());
     window.open(ohifUrl.toString(), '_blank');
     setIsOpen(false);
   }, []);
 
   const openStoneViewer = useCallback((studyInstanceUID) => {
     const orthancBaseURL = import.meta.env.VITE_ORTHANC_URL || 'http://localhost:8042';
+    const stoneUrl = `${orthancBaseURL}/stone-webviewer/index.html?study=${studyInstanceUID}`;
     
-    // 🔐 FIXED: Add credentials to Stone Viewer URL
-    const orthancUsername = 'alice';
-    const orthancPassword = 'alicePassword';
-    
-    // Create URL with embedded credentials for Stone Viewer
-    const orthancUrlWithAuth = orthancBaseURL.replace('http://', `http://${orthancUsername}:${orthancPassword}@`);
-    const stoneUrl = `${orthancUrlWithAuth}/stone-webviewer/index.html?study=${studyInstanceUID}`;
-    
-    console.log('🗿 Opening Stone Web Viewer with authentication');
+    console.log('🗿 Opening Stone Web Viewer:', stoneUrl);
     window.open(stoneUrl, '_blank');
     setIsOpen(false);
   }, []);
@@ -711,62 +694,45 @@ const RandomEmojiButton = ({ study }) => {
   );
 };
 
-// 🔧 SIMPLIFIED: WorklistTable - Updated for single page mode
 const WorklistTable = React.memo(({ 
   studies = [], 
   loading = false, 
-  totalRecords = 0,
-  filteredRecords = 0, // 🆕 NEW: Separate filtered count
+  totalRecords = 0, 
+  currentPage = 1, 
+  totalPages = 1, 
+  onPageChange,
   userRole = 'admin',
   onAssignmentComplete,
-  recordsPerPage = 20,
-  onRecordsPerPageChange,
-  usePagination = false // 🔧 DEFAULT: Single page mode
+  filters = {},
+  isReportPage = false
 }) => {
   const [activeTab, setActiveTab] = useState('all');
   const [selectedStudies, setSelectedStudies] = useState([]);
 
-  // Column visibility with defaults
-  const getDefaultColumnVisibility = () => {
-    return {
-      checkbox: true,
-      status: true,
-      randomEmoji: true,
-      user: true,
-      downloadBtn: true,
-      shareBtn: true,
-      discussion: true,
-      patientId: true,
-      patientName: true,
-      ageGender: true,
-      description: true,
-      series: true,
-      modality: true,
-      location: true,
-      studyDate: true,
-      uploadDate: false,
-      reportedDate: true,
-      reportedBy: false,
-      accession: false,
-      seenBy: false,
-      actions: true,
-      report: true,
-      assignDoctor: true
-    };
-  };
-
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    try {
-      const saved = localStorage.getItem('worklistColumns');
-      if (saved) {
-        const parsedColumns = JSON.parse(saved);
-        const defaultColumns = getDefaultColumnVisibility();
-        return { ...defaultColumns, ...parsedColumns };
-      }
-    } catch (error) {
-      console.warn('Error loading saved column preferences:', error);
-    }
-    return getDefaultColumnVisibility();
+  // Column visibility state
+  const [visibleColumns, setVisibleColumns] = useState({
+    checkbox: true,
+    status: true,
+    randomEmoji: true,
+    user: true,
+    downloadBtn: true,
+    discussion: true,
+    patientId: true,
+    patientName: true,
+    ageGender: true,
+    description: true,
+    series: true,
+    modality: true,
+    location: true,
+    studyDate: true,
+    uploadDate: true,
+    reportedDate: true,
+    reportedBy: true,
+    accession: true,
+    seenBy: true,
+    actions: true,
+    report: true,
+    assignDoctor: true
   });
   
   // Modal states
@@ -778,35 +744,7 @@ const WorklistTable = React.memo(({
   
   const canAssignDoctors = userRole === 'admin';
 
-  // Save column preferences
-  useEffect(() => {
-    try {
-      localStorage.setItem('worklistColumns', JSON.stringify(visibleColumns));
-    } catch (error) {
-      console.warn('Error saving column preferences:', error);
-    }
-  }, [visibleColumns]);
-
-  const handleColumnChange = useCallback((column, visible) => {
-    const essentialColumns = ['patientId', 'patientName', 'status'];
-    if (essentialColumns.includes(column) && !visible) {
-      console.warn(`Cannot hide essential column: ${column}`);
-      return;
-    }
-    
-    setVisibleColumns(prev => ({
-      ...prev,
-      [column]: visible
-    }));
-  }, []);
-
-  const handleResetColumnsToDefault = useCallback(() => {
-    const defaults = getDefaultColumnVisibility();
-    setVisibleColumns(defaults);
-    localStorage.setItem('worklistColumns', JSON.stringify(defaults));
-  }, []);
-
-  // 🔧 UPDATED: Filter studies based on active tab
+  // 🔧 MEMOIZE FILTERED STUDIES
   const filteredStudies = useMemo(() => {
     if (!studies || studies.length === 0) return [];
     
@@ -825,7 +763,7 @@ const WorklistTable = React.memo(({
     }
   }, [studies, activeTab]);
 
-  // 🔧 UPDATED: Calculate status counts from actual data
+  // 🔧 MEMOIZE STATUS COUNTS
   const statusCounts = useMemo(() => {
     return {
       all: studies.length,
@@ -836,7 +774,7 @@ const WorklistTable = React.memo(({
     };
   }, [studies]);
 
-  // Memoized callbacks
+  // 🔧 MEMOIZED CALLBACKS
   const handleSelectAll = useCallback((checked) => {
     if (checked) {
       const allStudyIds = filteredStudies.map(study => study._id);
@@ -854,6 +792,13 @@ const WorklistTable = React.memo(({
         return [...prev, studyId];
       }
     });
+  }, []);
+
+  const handleColumnChange = useCallback((column, visible) => {
+    setVisibleColumns(prev => ({
+      ...prev,
+      [column]: visible
+    }));
   }, []);
 
   const handlePatientClick = useCallback((patientId) => {
@@ -877,7 +822,7 @@ const WorklistTable = React.memo(({
     setSelectedStudies([]);
   }, [activeTab]);
 
-  // Footer functionality functions (keeping existing logic but simplified)
+  // Footer functionality functions (keeping existing logic)
   const handleAssignStudy = async () => {
     if (selectedStudies.length === 0) {
       toast.error('Please select at least one study to assign');
@@ -906,7 +851,7 @@ const WorklistTable = React.memo(({
         studyDescription: studyToAssign.studyDescription || '',
         examDescription: studyToAssign.examDescription || '',
         modalitiesInStudy: studyToAssign.modalitiesInStudy || [],
-        lastAssignedDoctor: studyToAssign.lastAssignedDoctor || null,
+        lastAssignedDoctor: studyToAssigned.lastAssignedDoctor || null,
         workflowStatus: studyToAssign.workflowStatus || 'new',
         additionalStudies: selectedStudies.length - 1
       };
@@ -919,145 +864,247 @@ const WorklistTable = React.memo(({
       toast.error('Failed to prepare assignment. Please try again.');
     }
   };
-
-  const handleAssignmentModalComplete = async (doctorId, priority, note) => {
-    setAssignmentModalOpen(false);
-    
-    if (doctorId && onAssignmentComplete) {
-      onAssignmentComplete();
-    }
-  };
-
-  // 🔧 ADDED: Missing footer action functions
-  const handleUnauthorized = useCallback(() => {
+  
+  const handleUnauthorized = async () => {
     if (selectedStudies.length === 0) {
       toast.error('Please select at least one study to mark as unauthorized');
       return;
     }
     
-    console.log('Unauthorized action for studies:', selectedStudies);
-    // TODO: Implement unauthorized functionality
-    toast.info(`Marking ${selectedStudies.length} studies as unauthorized`);
-  }, [selectedStudies]);
-
-  const handleExportWorklist = useCallback(() => {
-    console.log('Exporting worklist...');
+    const confirmation = window.confirm(
+      `Are you sure you want to mark ${selectedStudies.length} ${
+        selectedStudies.length === 1 ? 'study' : 'studies'
+      } as unauthorized? This action cannot be undone.`
+    );
+    
+    if (!confirmation) return;
+    
     try {
-      // Create CSV content
-      const headers = ['Patient ID', 'Patient Name', 'Age/Gender', 'Study Date', 'Modality', 'Description', 'Status', 'Location'];
-      const csvContent = [
-        headers.join(','),
-        ...filteredStudies.map(study => [
-          `"${study.patientId || ''}"`,
-          `"${study.patientName || ''}"`,
-          `"${study.ageGender || ''}"`,
-          `"${study.studyDate || ''}"`,
-          `"${study.modality || ''}"`,
-          `"${study.description || ''}"`,
-          `"${study.workflowStatus || ''}"`,
-          `"${study.location || ''}"`
-        ].join(','))
-      ].join('\n');
-
-      // Download CSV
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      toast.loading('Marking studies as unauthorized...');
+      
+      const response = await api.post('/api/footer/unauthorized', {
+        studyIds: selectedStudies,
+        reason: 'Marked as unauthorized via worklist'
+      });
+      
+      toast.dismiss();
+      
+      if (response.data.success) {
+        toast.success(`Marked ${selectedStudies.length} ${
+          selectedStudies.length === 1 ? 'study' : 'studies'
+        } as unauthorized`);
+        
+        setSelectedStudies([]);
+        
+        if (onAssignmentComplete) {
+          onAssignmentComplete();
+        }
+      } else {
+        toast.error(response.data.message || 'Failed to update study status');
+      }
+    } catch (error) {
+      toast.dismiss();
+      console.error('Error marking studies as unauthorized:', error);
+      toast.error('Failed to update study status. Please try again.');
+    }
+  };
+  
+  const handleExportWorklist = async () => {
+    try {
+      toast.loading('Preparing worklist export...');
+      
+      const queryParams = new URLSearchParams();
+      
+      if (selectedStudies.length > 0) {
+        queryParams.append('studyIds', selectedStudies.join(','));
+      } else {
+        Object.entries(filters).forEach(([key, value]) => {
+          if (value !== undefined && value !== null && value !== '') {
+            queryParams.append(key, value);
+          }
+        });
+      }
+      
+      const response = await api.get(`/footer/export?${queryParams.toString()}`, {
+        responseType: 'blob'
+      });
+      
+      toast.dismiss();
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
-      const url = URL.createObjectURL(blob);
-      link.setAttribute('href', url);
-      link.setAttribute('download', `worklist_export_${new Date().toISOString().split('T')[0]}.csv`);
-      link.style.visibility = 'hidden';
+      link.href = url;
+      
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0];
+      
+      link.setAttribute('download', `Worklist_${dateStr}.xlsx`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       
-      toast.success(`Exported ${filteredStudies.length} studies to CSV`);
+      toast.success('Export completed successfully');
     } catch (error) {
-      console.error('Export error:', error);
-      toast.error('Failed to export worklist');
+      toast.dismiss();
+      console.error('Error exporting worklist:', error);
+      toast.error('Failed to export worklist. Please try again.');
     }
-  }, [filteredStudies]);
-
-  const handleDispatchReport = useCallback(() => {
+  };
+  
+  const handleDispatchReport = async () => {
     if (selectedStudies.length === 0) {
       toast.error('Please select at least one study to dispatch report');
       return;
     }
     
-    console.log('Dispatching reports for studies:', selectedStudies);
-    // TODO: Implement dispatch report functionality
-    toast.info(`Dispatching reports for ${selectedStudies.length} studies`);
-  }, [selectedStudies]);
-
-  const handleBulkZipDownload = useCallback(async () => {
+    try {
+      const studiesWithoutReports = studies
+        .filter(study => selectedStudies.includes(study._id) && !study.ReportAvailable)
+        .map(study => study.patientId || study.accessionNumber || study._id);
+      
+      if (studiesWithoutReports.length > 0) {
+        toast.error(`${studiesWithoutReports.length} studies have no reports available`, {
+          duration: 5000
+        });
+        
+        if (studiesWithoutReports.length <= 5) {
+          toast(`Missing reports for: ${studiesWithoutReports.join(', ')}`, {
+            duration: 7000
+          });
+        }
+        
+        return;
+      }
+      
+      toast.loading('Dispatching reports...');
+      
+      const response = await api.post('/footer/reports/dispatch', {
+        studyIds: selectedStudies,
+        emailTemplate: 'standard'
+      });
+      
+      toast.dismiss();
+      
+      if (response.data.success) {
+        const { results } = response.data;
+        const successCount = results.filter(r => r.success).length;
+        const failCount = results.length - successCount;
+        
+        if (failCount === 0) {
+          toast.success(`Successfully dispatched ${successCount} ${
+            successCount === 1 ? 'report' : 'reports'
+          }`);
+        } else {
+          toast.success(`Dispatched ${successCount} reports, ${failCount} failed`);
+          
+          if (failCount <= 3) {
+            const failureReasons = results
+              .filter(r => !r.success)
+              .map(r => r.message)
+              .join('; ');
+            
+            toast(`Failed reports: ${failureReasons}`, {
+              duration: 7000
+            });
+          }
+        }
+        
+        setSelectedStudies([]);
+        
+        if (onAssignmentComplete) {
+          onAssignmentComplete();
+        }
+      } else {
+        toast.error(response.data.message || 'Failed to dispatch reports');
+      }
+    } catch (error) {
+      toast.dismiss();
+      console.error('Error dispatching reports:', error);
+      toast.error('Failed to dispatch reports. Please try again.');
+    }
+  };
+  
+  const handleBulkZipDownload = async () => {
     if (selectedStudies.length === 0) {
       toast.error('Please select at least one study to download');
       return;
     }
+
+    if (selectedStudies.length > 20) {
+      const confirmation = window.confirm(
+        `You are about to download ${selectedStudies.length} studies, which may take a long time. Do you want to continue?`
+      );
+      
+      if (!confirmation) return;
+    }
     
     try {
-      toast.loading(`Preparing bulk download for ${selectedStudies.length} studies...`);
-      
-      // Get the selected study data
-      const selectedStudyData = studies.filter(study => selectedStudies.includes(study._id));
-      
-      // Check if all studies have orthancStudyID
-      const validStudies = selectedStudyData.filter(study => study.orthancStudyID);
-      
-      if (validStudies.length === 0) {
-        toast.dismiss();
-        toast.error('No valid studies found for download');
-        return;
-      }
-      
-      if (validStudies.length !== selectedStudies.length) {
-        toast.dismiss();
-        toast.warning(`Only ${validStudies.length} of ${selectedStudies.length} studies can be downloaded`);
-      }
-      
-      // Create download URLs for each study
-      const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      const downloadPromises = validStudies.map((study, index) => {
-        return new Promise((resolve, reject) => {
-          const downloadUrl = `${backendUrl}/api/orthanc-download/study/${study.orthancStudyID}/download`;
-          const link = document.createElement('a');
-          link.href = downloadUrl;
-          link.download = `study_${study.patientId}_${study.orthancStudyID}.zip`;
-          link.style.display = 'none';
-          
-          // Add a small delay between downloads to avoid overwhelming the server
-          setTimeout(() => {
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            resolve(study);
-          }, index * 1000); // 1 second delay between each download
-        });
+      toast.loading(`Preparing ${selectedStudies.length} studies for download...`, {
+        duration: 10000
       });
       
-      // Execute all downloads
-      await Promise.all(downloadPromises);
+      const queryParams = `studyIds=${selectedStudies.join(',')}`;
+      
+      const response = await api.get(`/footer/download-zip?${queryParams}`, {
+        responseType: 'blob'
+      });
       
       toast.dismiss();
-      toast.success(`Successfully initiated download for ${validStudies.length} studies`);
       
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0];
+      
+      link.setAttribute('download', `Studies_${dateStr}.zip`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast.success('Download started successfully');
     } catch (error) {
-      console.error('Bulk download error:', error);
       toast.dismiss();
-      toast.error('Failed to initiate bulk download');
+      console.error('Error downloading zip:', error);
+      toast.error('Failed to download studies. Please try again.');
     }
-  }, [selectedStudies, studies]);
+  };
 
-  // 🔧 ADDED: Missing patient click handlers
-  // const handlePatientClick = useCallback((patientId) => {
-  //   setSelectedPatientId(patientId);
-  //   setPatientDetailModalOpen(true);
-  // }, []);
-
-  // const handleAssignDoctor = useCallback((study) => {
-  //   setSelectedStudy(study);
-  //   setAssignmentModalOpen(true);
-  // }, []);
-
+  const handleAssignmentModalComplete = async (doctorId, priority, note) => {
+    setAssignmentModalOpen(false);
+    
+    if (doctorId) {
+      try {
+        toast.loading(`Assigning ${selectedStudies.length} studies to doctor...`);
+        
+        const response = await api.post('/footer/assign', {
+          studyIds: selectedStudies,
+          doctorId,
+          priority,
+          assignmentNote: note
+        });
+        
+        toast.dismiss();
+        
+        if (response.data.success) {
+          toast.success(`Successfully assigned ${selectedStudies.length} studies`);
+          setSelectedStudies([]);
+          
+          if (onAssignmentComplete) {
+            onAssignmentComplete();
+          }
+        } else {
+          toast.error(response.data.message || 'Failed to assign studies');
+        }
+      } catch (error) {
+        toast.dismiss();
+        console.error('Error assigning studies:', error);
+        toast.error('Failed to assign studies. Please try again.');
+      }
+    }
+  };
+  
   // 🔧 MEMOIZED TABLE HEADER
   const tableHeader = useMemo(() => (
     <thead className="sticky top-0 z-10">
@@ -1090,12 +1137,6 @@ const WorklistTable = React.memo(({
         {visibleColumns.downloadBtn && (
           <th className="w-10 px-1 py-2 text-center text-xs font-bold text-gray-700 uppercase tracking-wider border-r border-gray-300">
             ⬇️
-          </th>
-        )}
-        {/* 🆕 NEW: Share column header */}
-        {visibleColumns.shareBtn && (
-          <th className="w-10 px-1 py-2 text-center text-xs font-bold text-gray-700 uppercase tracking-wider border-r border-gray-300">
-            🔗
           </th>
         )}
         {visibleColumns.discussion && (
@@ -1185,7 +1226,7 @@ const WorklistTable = React.memo(({
         )}
       </tr>
     </thead>
-  ), [visibleColumns, filteredStudies.length, selectedStudies.length, handleSelectAll, canAssignDoctors]);
+  ), [visibleColumns, filteredStudies.length, selectedStudies.length, handleSelectAll]);
 
   // 🔧 MEMOIZED TABLE BODY
   const tableBody = useMemo(() => (
@@ -1264,20 +1305,21 @@ const WorklistTable = React.memo(({
                 </button>
               </div>
 
+              {/* Status Legend */}
               <StatusLegend />
 
+              {/* Column Configurator */}
               <ColumnConfigurator 
                 visibleColumns={visibleColumns}
                 onColumnChange={handleColumnChange}
-                onResetToDefault={handleResetColumnsToDefault}
               />
             </div>
           </div>
         </div>
       </div>
       
-      {/* Table Container - 🔧 UPDATED: Remove pagination space */}
-      <div className="flex-1 overflow-hidden pb-8">
+      {/* Table Container */}
+      <div className="flex-1 overflow-hidden pb-16">
         {loading ? (
           <div className="flex justify-center items-center h-full bg-gray-50">
             <div className="text-center">
@@ -1295,29 +1337,23 @@ const WorklistTable = React.memo(({
         )}
       </div>
       
-      {/* 🆕 NEW: Single page footer with record controls */}
-      <div className="bg-gradient-to-r from-green-50 to-emerald-100 px-6 py-3 border-t border-green-200 flex items-center justify-between">
+      {/* Excel-style Footer with Pagination */}
+      <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <p className="text-sm text-green-700 font-medium">
-              Showing <span className="font-bold">{filteredStudies.length}</span> of <span className="font-bold">{totalRecords}</span> total records
-            </p>
-          </div>
-          {filteredRecords !== totalRecords && (
-            <p className="text-xs text-green-600">
-              (Filtered from {totalRecords} total)
-            </p>
-          )}
+          <p className="text-sm text-gray-700 font-medium">
+            Showing <span className="font-bold text-blue-600">{filteredStudies.length > 0 ? ((currentPage - 1) * 10) + 1 : 0}</span> to{' '}
+            <span className="font-bold text-blue-600">{Math.min(currentPage * 10, totalRecords)}</span> of{' '}
+            <span className="font-bold text-blue-600">{totalRecords}</span> results
+          </p>
         </div>
         
+        {/* 🆕 NEW: Enhanced Dropdown Pagination */}
         <DropdownPagination
-          recordsPerPage={recordsPerPage}
-          onRecordsPerPageChange={onRecordsPerPageChange}
+          currentPage={currentPage}
+          totalPages={totalPages}
           totalRecords={totalRecords}
-          usePagination={usePagination}
+          onPageChange={onPageChange}
+          recordsPerPage={20}
           loading={loading}
         />
       </div>
@@ -1427,9 +1463,16 @@ const WorklistTable = React.memo(({
       )}
     </div>
   );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.studies.length === nextProps.studies.length &&
+    prevProps.loading === nextProps.loading &&
+    prevProps.currentPage === nextProps.currentPage &&
+    JSON.stringify(prevProps.studies) === JSON.stringify(nextProps.studies)
+  );
 });
 
-// StudyRow component - Add emergency row styling
+// 🔧 StudyRow component with enhanced date formatting
 const StudyRow = React.memo(({ 
   study, 
   index, 
@@ -1443,12 +1486,10 @@ const StudyRow = React.memo(({
 }) => {
   const isSelected = selectedStudies.includes(study._id);
   
-  // 🆕 NEW: Check if this is an emergency case
-  const isEmergency = study.caseType?.toLowerCase() === 'emergency' || 
-                     study.priority === 'EMERGENCY' || 
-                     study.assignment?.priority === 'EMERGENCY';
-  
-  // 🔧 ADDED: Missing click handlers for this row
+  const handleSelectStudy = useCallback(() => {
+    onSelectStudy(study._id);
+  }, [study._id, onSelectStudy]);
+
   const handlePatientClick = useCallback(() => {
     onPatientClick(study.patientId);
   }, [study.patientId, onPatientClick]);
@@ -1460,64 +1501,42 @@ const StudyRow = React.memo(({
   const handleAssignDoctor = useCallback(() => {
     onAssignDoctor(study);
   }, [study, onAssignDoctor]);
-  
-  // 🆕 NEW: Dynamic row styling based on emergency status
-  const getRowClasses = () => {
-    let baseClasses = "hover:bg-blue-100 transition-colors duration-150 border-b border-gray-200";
-    
-    if (isEmergency) {
-      // Emergency cases get red background with varying intensity
-      if (isSelected) {
-        return `${baseClasses} bg-red-200 hover:bg-red-300 border-red-300`;
-      } else {
-        return `${baseClasses} bg-red-100 hover:bg-red-200 border-red-200`;
-      }
-    } else {
-      // Normal cases keep original styling
-      if (isSelected) {
-        return `${baseClasses} bg-blue-50`;
-      } else {
-        return `${baseClasses} ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`;
-      }
-    }
-  };
-  
+
   return (
-    <tr className={getRowClasses()}>
-      {/* Table cells implementation remains the same as your existing code */}
+    <tr 
+      className={`
+        ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} 
+        hover:bg-blue-100 transition-colors duration-150 border-b border-gray-200
+        ${isSelected ? 'bg-blue-50' : ''}
+      `}
+    >
       {visibleColumns.checkbox && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
           <input 
             type="checkbox" 
             className="rounded border-gray-300 w-4 h-4"
             checked={isSelected}
-            onChange={() => onSelectStudy(study._id)}
+            onChange={handleSelectStudy}
           />
         </td>
       )}
       
       {visibleColumns.status && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
           <div className="flex justify-center">
             <StatusDot status={study.workflowStatus} priority={study.priority} />
-            {/* 🆕 NEW: Emergency indicator */}
-            {isEmergency && (
-              <div className="ml-1 flex items-center" title="Emergency Case">
-                <span className="text-red-600 font-bold text-xs animate-pulse">🚨</span>
-              </div>
-            )}
           </div>
         </td>
       )}
 
       {visibleColumns.randomEmoji && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
           <RandomEmojiButton study={study} />
         </td>
       )}
 
       {visibleColumns.user && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
           <button 
             onClick={handlePatientClick}
             className="text-sm font-semibold hover:text-blue-800 hover:underline flex items-center justify-center"
@@ -1529,205 +1548,169 @@ const StudyRow = React.memo(({
       )}
 
       {visibleColumns.downloadBtn && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
           <DownloadDropdown study={study} />
         </td>
       )}
 
-      {/* 🆕 NEW: Share Button Column */}
-      {visibleColumns.shareBtn && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <ShareButton study={study} />
-        </td>
-      )}
-
       {visibleColumns.discussion && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
           <DiscussionButton study={study} />
         </td>
       )}
       
       {visibleColumns.patientId && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-2 py-2 border-r border-gray-200">
           <button 
             onClick={handlePatienIdClick}
-            className={`hover:underline text-sm font-medium truncate ${
-              isEmergency ? 'text-red-700 hover:text-red-900' : 'text-blue-600 hover:text-blue-800'
-            }`}
+            className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium truncate"
             title="Click to view patient details"
           >
             {study.patientId}
-            {/* 🆕 NEW: Emergency badge */}
-            {isEmergency && (
-              <span className="ml-1 inline-flex items-center px-1 py-0.5 rounded text-xs font-bold bg-red-600 text-white">
-                EMERGENCY
-              </span>
-            )}
           </button>
         </td>
       )}
       
       {visibleColumns.patientName && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-sm font-medium truncate ${
-            isEmergency ? 'text-red-900' : 'text-gray-900'
-          }`} title={study.patientName}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-sm font-medium text-gray-900 truncate" title={study.patientName}>
             {study.patientName}
           </div>
         </td>
       )}
       
       {visibleColumns.ageGender && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs ${isEmergency ? 'text-red-700' : 'text-gray-600'}`}>
-            {study.ageGender}
-          </div>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
+          <div className="text-xs text-gray-600">{study.ageGender}</div>
         </td>
       )}
       
       {visibleColumns.description && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs truncate max-w-40 ${
-            isEmergency ? 'text-red-900 font-medium' : 'text-gray-900'
-          }`} title={study.description}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-xs text-gray-900 truncate max-w-40" title={study.description}>
             {study.description}
           </div>
         </td>
       )}
       
       {visibleColumns.series && (
-        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs ${isEmergency ? 'text-red-700' : 'text-gray-600'}`}>
-            {study.seriesImages}
-          </div>
+        <td className="px-1 py-2 text-center border-r border-gray-200">
+          <div className="text-xs text-gray-600">{study.seriesImages}</div>
         </td>
       )}
       
       {visibleColumns.modality && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-            isEmergency ? 'bg-red-600 text-white' : 'bg-indigo-100 text-indigo-800'
-          }`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-800">
             {study.modality}
           </span>
         </td>
       )}
       
       {visibleColumns.location && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs truncate max-w-28 ${
-            isEmergency ? 'text-red-700' : 'text-gray-600'
-          }`} title={study.location}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-xs text-gray-600 truncate max-w-28" title={study.location}>
             {study.location}
           </div>
         </td>
       )}
       
-      {/* ✨ UPDATED: Study Date with emergency styling */}
+      {/* ✨ UPDATED: Study Date with new date formatting */}
       {visibleColumns.studyDate && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs ${isEmergency ? 'text-red-700' : 'text-gray-600'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
+          <div className="text-xs text-gray-600">
             <div className="font-medium" title={formatMonthDayYear(study.studyDateTime)}>
               {formatMonthDay(study.studyDateTime)}
             </div>
-            <div className={`${isEmergency ? 'text-red-500' : 'text-gray-500'}`}>
-              {formatTime(study.studyDateTime)}
-            </div>
+            <div className="text-gray-500">{formatTime(study.studyDateTime)}</div>
           </div>
         </td>
       )}
       
-      {/* ✨ UPDATED: Upload Date with emergency styling */}
+      {/* ✨ UPDATED: Upload Date with new date formatting */}
       {visibleColumns.uploadDate && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs ${isEmergency ? 'text-red-700' : 'text-gray-600'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
+          <div className="text-xs text-gray-600">
             <div className="font-medium" title={formatMonthDayYear(study.uploadDateTime)}>
               {formatRelativeDate(study.uploadDateTime)}
             </div>
-            <div className={`${isEmergency ? 'text-red-500' : 'text-gray-500'}`}>
-              {formatTime(study.uploadDateTime)}
-            </div>
+            <div className="text-gray-500">{formatTime(study.uploadDateTime)}</div>
           </div>
         </td>
       )}
       
-      {/* ✨ UPDATED: Reported Date with emergency styling */}
-      {visibleColumns.reportedDate && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs ${isEmergency ? 'text-red-700' : 'text-gray-600'}`}>
-            {(() => {
-              const reportedDate = study.reportedDateTime || 
-                                 study.reportFinalizedAt || 
-                                 study.reportDate ||
-                                 (study.uploadedReportsData && study.uploadedReportsData.length > 0 ? 
-                                  study.uploadedReportsData[study.uploadedReportsData.length - 1].uploadedAt : null);
-              
-              if (reportedDate) {
-                return (
-                  <>
-                    <div className="font-medium" title={formatMonthDayYear(reportedDate)}>
-                      {formatAbbrevMonthDay(reportedDate)}
-                    </div>
-                    <div className={`${isEmergency ? 'text-red-500' : 'text-gray-500'}`}>
-                      {formatTime(reportedDate)}
-                    </div>
-                  </>
-                );
-              } else if (study.uploadedReportsCount > 0) {
-                return (
-                  <div className={`font-medium ${isEmergency ? 'text-red-600' : 'text-blue-600'}`}>
-                    {study.uploadedReportsCount} report{study.uploadedReportsCount > 1 ? 's' : ''}
-                  </div>
-                );
-              } else if (study.workflowStatus === 'report_in_progress' || 
-                        study.workflowStatus === 'doctor_opened_report') {
-                return (
-                  <div className={`font-medium ${isEmergency ? 'text-red-500' : 'text-orange-500'}`}>
-                    In Progress
-                  </div>
-                );
-              } else {
-                return (
-                  <div className="text-gray-400">Not reported</div>
-                );
-              }
-            })()}
-          </div>
-        </td>
-      )}
+      {/* ✨ UPDATED: Reported Date with enhanced date formatting and fallback logic */}
+{/* ✨ UPDATED: Reported Date with enhanced date formatting and fallback logic */}
+{visibleColumns.reportedDate && (
+  <td className="px-2 py-2 text-center border-r border-gray-200">
+    <div className="text-xs text-gray-600">
+      {(() => {
+        // Check multiple possible date fields for when a report was completed
+        const reportedDate = study.reportedDateTime || 
+                           study.reportFinalizedAt || 
+                           study.reportDate ||
+                           (study.uploadedReportsData && study.uploadedReportsData.length > 0 ? 
+                            study.uploadedReportsData[study.uploadedReportsData.length - 1].uploadedAt : null);
+        
+        if (reportedDate) {
+          return (
+            <>
+              <div className="font-medium" title={formatMonthDayYear(reportedDate)}>
+                {formatAbbrevMonthDay(reportedDate)}
+              </div>
+              <div className="text-gray-500">{formatTime(reportedDate)}</div>
+            </>
+          );
+        } else if (study.uploadedReportsCount > 0) {
+          // If there are reports but no specific date, show report count
+          return (
+            <div className="text-blue-600 font-medium">
+              {study.uploadedReportsCount} report{study.uploadedReportsCount > 1 ? 's' : ''}
+            </div>
+          );
+        } else if (study.workflowStatus === 'report_in_progress' || 
+                  study.workflowStatus === 'doctor_opened_report') {
+          return (
+            <div className="text-orange-500 font-medium">
+              In Progress
+            </div>
+          );
+        } else {
+          return (
+            <div className="text-gray-400">Not reported</div>
+          );
+        }
+      })()}
+    </div>
+  </td>
+)}
       
       {visibleColumns.reportedBy && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs truncate ${
-            isEmergency ? 'text-red-900' : 'text-gray-900'
-          }`} title={study.reportedBy || 'N/A'}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-xs text-gray-900 truncate" title={study.reportedBy || 'N/A'}>
             {study.reportedBy || 'N/A'}
           </div>
         </td>
       )}
 
       {visibleColumns.accession && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs truncate ${
-            isEmergency ? 'text-red-900' : 'text-gray-900'
-          }`} title={study.accessionNumber || 'N/A'}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-xs text-gray-900 truncate" title={study.accessionNumber || 'N/A'}>
             {study.accessionNumber || 'N/A'}
           </div>
         </td>
       )}
 
       {visibleColumns.seenBy && (
-        <td className={`px-2 py-2 border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-          <div className={`text-xs truncate ${
-            isEmergency ? 'text-red-900' : 'text-gray-900'
-          }`} title={study.seenBy || 'Not Assigned'}>
+        <td className="px-2 py-2 border-r border-gray-200">
+          <div className="text-xs text-gray-900 truncate" title={study.seenBy || 'Not Assigned'}>
             {study.seenBy || 'Not Assigned'}
           </div>
         </td>
       )}
       
       {visibleColumns.actions && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
           <div className="flex justify-center items-center space-x-1">
             <EyeIconDropdown studyInstanceUID={study.instanceID} />
             <DownloadDropdown study={study} />
@@ -1736,7 +1719,7 @@ const StudyRow = React.memo(({
       )}
       
       {visibleColumns.report && (
-        <td className={`px-2 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+        <td className="px-2 py-2 text-center border-r border-gray-200">
           <div className="flex justify-center">
             <ReportButton study={study} />
           </div>
@@ -1744,19 +1727,17 @@ const StudyRow = React.memo(({
       )}
       
       {canAssignDoctors && visibleColumns.assignDoctor && (
-        <td className={`px-2 py-2 text-center ${isEmergency ? 'border-red-200' : ''}`}>
+        <td className="px-2 py-2 text-center">
           <button 
             onClick={handleAssignDoctor}
             className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${
               study.workflowStatus === 'report_finalized' 
+                
+ 
                 ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
                 : study.workflowStatus === 'assigned_to_doctor' || study.workflowStatus === 'report_in_progress'
-                  ? isEmergency 
-                    ? 'bg-red-500 text-white hover:bg-red-600' 
-                    : 'bg-yellow-500 text-white hover:bg-yellow-600'
-                  : isEmergency
-                    ? 'bg-red-600 text-white hover:bg-red-700 animate-pulse'
-                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                  ? 'bg-yellow-500 text-white hover:bg-yellow-600' 
+                  : 'bg-blue-500 text-white hover:bg-blue-600'
             }`}
             disabled={study.workflowStatus === 'final_report_downloaded'}
           >
@@ -1764,9 +1745,7 @@ const StudyRow = React.memo(({
               ? 'Done' 
               : study.workflowStatus === 'assigned_to_doctor' || study.workflowStatus === 'report_in_progress'
                 ? 'Reassign' 
-                : isEmergency 
-                  ? '🚨 ASSIGN'
-                  : 'Assign'
+                : 'Assign'
             }
           </button>
         </td>

@@ -13,18 +13,10 @@ const DoctorDashboard = React.memo(() => {
 
   const [allStudies, setAllStudies] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeCategory, setActiveCategory] = useState('all');
-  
-  // 🔧 SIMPLIFIED: Single page mode state management (matching admin)
-  const [recordsPerPage, setRecordsPerPage] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [totalRecords, setTotalRecords] = useState(0);
-  
-  // 🆕 NEW: Date filter state for backend integration (matching admin)
-  const [dateFilter, setDateFilter] = useState('last24h'); // Default to 24 hours
-  const [customDateFrom, setCustomDateFrom] = useState('');
-  const [customDateTo, setCustomDateTo] = useState('');
-  const [dateType, setDateType] = useState('UploadDate'); // StudyDate, UploadDate
-  
+  const [activeCategory, setActiveCategory] = useState('all');
   const [dashboardStats, setDashboardStats] = useState({
     totalStudies: 0,
     pendingStudies: 0,
@@ -40,47 +32,25 @@ const DoctorDashboard = React.memo(() => {
   const intervalRef = useRef(null);
   const countdownRef = useRef(null);
 
-  // 🔧 ENHANCED: Fetch studies with date filters (matching admin pattern)
-  const fetchStudies = useCallback(async (showLoadingState = true, searchParams = {}) => {
+  // 🔧 IMPROVED API CALL WITH BACKEND CATEGORY FILTERING
+  const fetchStudies = useCallback(async (showLoadingState = true) => {
     try {
       if (showLoadingState) {
         setLoading(true);
       }
       
-      console.log(`🔄 DOCTOR: Fetching studies with limit: ${recordsPerPage}, category: ${activeCategory}, dateFilter: ${dateFilter}`);
-      
-      // 🆕 NEW: Build API parameters including date filters (matching admin)
-      const apiParams = {
-        limit: recordsPerPage,
-        category: activeCategory !== 'all' ? activeCategory : undefined,
-        dateType: dateType,
-        ...searchParams // Allow override from WorklistSearch
-      };
-
-      // Add date filter parameters
-      if (dateFilter === 'custom') {
-        if (customDateFrom) apiParams.customDateFrom = customDateFrom;
-        if (customDateTo) apiParams.customDateTo = customDateTo;
-        apiParams.quickDatePreset = 'custom';
-      } else if (dateFilter && dateFilter !== 'all') {
-        apiParams.quickDatePreset = dateFilter;
-      }
-      
-      // Remove undefined values
-      Object.keys(apiParams).forEach(key => 
-        apiParams[key] === undefined && delete apiParams[key]
-      );
-
-      console.log('📤 DOCTOR API Parameters:', apiParams);
-      
       const response = await api.get('/doctor/assigned-studies', {
-        params: apiParams
+        params: {
+          page: currentPage,
+          limit: 50,
+          // Use category filter if not showing 'all'
+          category: activeCategory !== 'all' ? activeCategory : undefined,
+        }
       });
-      
-      console.log('📊 DOCTOR Studies response:', response.data);
       
       if (response.data.success) {
         setAllStudies(response.data.data);
+        setTotalPages(response.data.totalPages);
         setTotalRecords(response.data.totalRecords);
         setLastRefresh(new Date());
         
@@ -114,91 +84,48 @@ const DoctorDashboard = React.memo(() => {
             }).length
           });
         }
-        
-        console.log('✅ DOCTOR Studies fetched successfully:', {
-          count: response.data.data.length,
-          totalRecords: response.data.totalRecords,
-          dateFilter: dateFilter,
-          isSinglePage: response.data.pagination?.isSinglePage || true
-        });
       }
     } catch (error) {
-      console.error('❌ DOCTOR Error fetching studies:', error);
-      setAllStudies([]);
-      setTotalRecords(0);
+      console.error('Error fetching studies:', error);
     } finally {
       if (showLoadingState) {
         setLoading(false);
       }
     }
-  }, [activeCategory, recordsPerPage, dateFilter, customDateFrom, customDateTo, dateType]);
-
-  // 🆕 NEW: Date filter handlers (matching admin)
-  const handleDateFilterChange = useCallback((newDateFilter) => {
-    console.log(`📅 DOCTOR: Changing date filter to ${newDateFilter}`);
-    setDateFilter(newDateFilter);
-    setNextRefreshIn(300); // Reset countdown
-  }, []);
-
-  const handleCustomDateChange = useCallback((from, to) => {
-    console.log(`📅 DOCTOR: Setting custom date range from ${from} to ${to}`);
-    setCustomDateFrom(from);
-    setCustomDateTo(to);
-    if (from || to) {
-      setDateFilter('custom');
-    }
-    setNextRefreshIn(300); // Reset countdown
-  }, []);
-
-  const handleDateTypeChange = useCallback((newDateType) => {
-    console.log(`📅 DOCTOR: Changing date type to ${newDateType}`);
-    setDateType(newDateType);
-    setNextRefreshIn(300); // Reset countdown
-  }, []);
-
-  // 🆕 NEW: Handle search with backend parameters (matching admin)
-  const handleSearchWithBackend = useCallback((searchParams) => {
-    console.log('🔍 DOCTOR: Handling search with backend params:', searchParams);
-    fetchStudies(true, searchParams);
-  }, [fetchStudies]);
+  }, [currentPage, activeCategory]);
 
   // Handle category change
   const handleCategoryChange = useCallback((category) => {
-    console.log(`🏷️ DOCTOR: Changing category to: ${category}`);
     setActiveCategory(category);
-    setNextRefreshIn(300); // Reset countdown
+    setCurrentPage(1); // Reset to first page when changing categories
   }, []);
 
-  // 🔧 SIMPLIFIED: Handle records per page change (no pagination, matching admin)
-  const handleRecordsPerPageChange = useCallback((newRecordsPerPage) => {
-    console.log(`📊 DOCTOR: Changing records per page from ${recordsPerPage} to ${newRecordsPerPage}`);
-    setRecordsPerPage(newRecordsPerPage);
-    setNextRefreshIn(300); // Reset countdown
-  }, [recordsPerPage]);
+  // Handle page change
+  const handlePageChange = useCallback((page) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  }, [totalPages]);
 
   // Handle assignment completion (refresh data)
   const handleAssignmentComplete = useCallback(() => {
-    console.log('📋 DOCTOR: Assignment completed, refreshing studies...');
     fetchStudies();
     setNextRefreshIn(300); // Reset countdown
   }, [fetchStudies]);
 
   // Handle manual refresh
   const handleManualRefresh = useCallback(() => {
-    console.log('🔄 DOCTOR: Manual refresh triggered');
     fetchStudies();
     setNextRefreshIn(300); // Reset countdown
   }, [fetchStudies]);
 
   // Handle worklist view
   const handleWorklistView = useCallback((view) => {
-    console.log('DOCTOR: Worklist view changed:', view);
-    setNextRefreshIn(300); // Reset countdown
+    console.log('Worklist view changed:', view);
   }, []);
 
-  // Initial data fetch (triggered when dependencies change)
+  // Initial data fetch
   useEffect(() => {
-    console.log(`🔄 DOCTOR useEffect triggered - Records: ${recordsPerPage}, Category: ${activeCategory}, DateFilter: ${dateFilter}`);
     fetchStudies();
   }, [fetchStudies]);
 
@@ -214,7 +141,7 @@ const DoctorDashboard = React.memo(() => {
 
     // Set up auto-refresh every 5 minutes (300 seconds)
     intervalRef.current = setInterval(() => {
-      console.log('🔄 DOCTOR: Auto-refreshing studies...');
+      console.log('Auto-refreshing studies...');
       fetchStudies(false); // Don't show loading state for auto-refresh
       setNextRefreshIn(300); // Reset countdown
     }, 300000); // 5 minutes
@@ -261,7 +188,7 @@ const DoctorDashboard = React.memo(() => {
       <UniversalNavbar />
 
       <div className="max-w-8xl mx-auto p-4">
-        {/* Enhanced Header with Auto-Refresh Info and Date Filters */}
+        {/* Enhanced Header with Auto-Refresh Info */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             {/* Left side - Title and basic info */}
@@ -269,54 +196,27 @@ const DoctorDashboard = React.memo(() => {
               <h1 className="text-2xl font-bold text-gray-900">My Assigned Studies</h1>
               <div className="flex items-center space-x-4 mt-1">
                 <span className="text-sm text-gray-600">{totalRecords} total studies</span>
-                <span className="text-sm text-gray-500">
-                  ({recordsPerPage} per page - Single page mode)
-                </span>
-                {/* 🆕 NEW: Date filter indicator */}
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                  📅 {dateFilter === 'custom' 
-                    ? `Custom: ${customDateFrom || 'start'} - ${customDateTo || 'end'}` 
-                    : dateFilter === 'last24h' ? 'Last 24 hours' 
-                    : dateFilter}
-                </span>
                 
                 {/* 🔧 AUTO-REFRESH STATUS */}
-                
+                <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-1">
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    <span className="text-xs text-green-700">Auto-refresh enabled</span>
+                  </div>
+                  <span className="text-xs text-gray-500">|</span>
+                  <span className="text-xs text-gray-500">
+                    Last updated: {formatLastRefresh}
+                  </span>
+                  <span className="text-xs text-gray-500">|</span>
+                  <span className="text-xs text-blue-600 font-medium">
+                    Next refresh in: {formatRefreshTime}
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Right side - Date Filter Controls and Actions */}
+            {/* Right side - Compact actions */}
             <div className="flex items-center space-x-3">
-              {/* Quick Date Filter Controls (matching admin) */}
-              <div className="flex items-center space-x-1 bg-white rounded-lg border border-gray-200 p-1">
-                {['last24h', 'today', 'yesterday', 'thisWeek', 'thisMonth'].map(filter => (
-                  <button
-                    key={filter}
-                    onClick={() => handleDateFilterChange(filter)}
-                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                      dateFilter === filter 
-                        ? 'bg-blue-500 text-white' 
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {filter === 'last24h' ? '24h' : 
-                     filter === 'today' ? 'Today' :
-                     filter === 'yesterday' ? 'Yesterday' :
-                     filter === 'thisWeek' ? 'Week' : 'Month'}
-                  </button>
-                ))}
-                <button
-                  onClick={() => handleDateFilterChange('custom')}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    dateFilter === 'custom' 
-                      ? 'bg-purple-500 text-white' 
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  Custom
-                </button>
-              </div>
-
               {/* Quick Stats - Horizontal - DOCTOR SPECIFIC */}
               <div className="hidden md:flex items-center space-x-4 px-4 py-2 bg-white rounded-lg border border-gray-200 shadow-sm">
                 <div className="text-center">
@@ -379,7 +279,14 @@ const DoctorDashboard = React.memo(() => {
           </div>
 
           {/* 🔧 AUTO-REFRESH PROGRESS BAR */}
-          
+          <div className="w-full bg-gray-200 rounded-full h-1 overflow-hidden">
+            <div 
+              className="h-full bg-gradient-to-r from-blue-500 to-green-500 transition-all duration-1000 ease-linear"
+              style={{ 
+                width: `${((300 - nextRefreshIn) / 300) * 100}%` 
+              }}
+            ></div>
+          </div>
         </div>
 
         {/* PRIMARY FOCUS: Enhanced Worklist Section */}
@@ -390,23 +297,15 @@ const DoctorDashboard = React.memo(() => {
               allStudies={allStudies}
               loading={loading}
               totalRecords={totalRecords}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
               userRole="doctor"
               onAssignmentComplete={handleAssignmentComplete}
               onView={handleWorklistView}
               activeCategory={activeCategory}
               onCategoryChange={handleCategoryChange}
               categoryStats={dashboardStats}
-              recordsPerPage={recordsPerPage}
-              onRecordsPerPageChange={handleRecordsPerPageChange}
-              // 🆕 NEW: Pass date filter props (matching admin)
-              dateFilter={dateFilter}
-              onDateFilterChange={handleDateFilterChange}
-              customDateFrom={customDateFrom}
-              customDateTo={customDateTo}
-              onCustomDateChange={handleCustomDateChange}
-              dateType={dateType}
-              onDateTypeChange={handleDateTypeChange}
-              onSearchWithBackend={handleSearchWithBackend}
             />
           </div>
         </div>
@@ -437,30 +336,6 @@ const DoctorDashboard = React.memo(() => {
                 </div>
                 <div className="text-xs text-blue-600 mt-1">
                   Last updated: {formatLastRefresh}
-                </div>
-              </div>
-
-              {/* Date Filter Mobile Controls */}
-              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-                <div className="text-sm font-medium text-gray-700 mb-2">Date Filter</div>
-                <div className="flex flex-wrap gap-1">
-                  {['last24h', 'today', 'yesterday', 'thisWeek', 'thisMonth', 'custom'].map(filter => (
-                    <button
-                      key={filter}
-                      onClick={() => handleDateFilterChange(filter)}
-                      className={`px-2 py-1 text-xs rounded transition-colors ${
-                        dateFilter === filter 
-                          ? 'bg-blue-500 text-white' 
-                          : 'bg-white text-gray-600 border border-gray-200'
-                      }`}
-                    >
-                      {filter === 'last24h' ? '24h' : 
-                       filter === 'today' ? 'Today' :
-                       filter === 'yesterday' ? 'Yesterday' :
-                       filter === 'thisWeek' ? 'Week' : 
-                       filter === 'thisMonth' ? 'Month' : 'Custom'}
-                    </button>
-                  ))}
                 </div>
               </div>
 

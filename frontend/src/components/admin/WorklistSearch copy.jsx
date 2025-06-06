@@ -14,17 +14,9 @@ const WorklistSearch = React.memo(({
   activeCategory,
   onCategoryChange,
   categoryStats,
+  // 🔧 SINGLE PAGE: Only records per page control needed
   recordsPerPage,
-  onRecordsPerPageChange,
-  // 🆕 NEW: Backend date filter props
-  dateFilter = 'last24h',
-  onDateFilterChange,
-  customDateFrom = '',
-  customDateTo = '',
-  onCustomDateChange,
-  dateType = 'UploadDate',
-  onDateTypeChange,
-  onSearchWithBackend
+  onRecordsPerPageChange
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchType, setSearchType] = useState("");
@@ -40,10 +32,9 @@ const WorklistSearch = React.memo(({
   // Enhanced filters matching the UI design
   const [refName, setRefName] = useState('');
   const [workflowStatus, setWorkflowStatus] = useState('all');
-  // 🔧 REMOVED: Local date state - now using props from Dashboard
-  // const [dateType, setDateType] = useState('StudyDate');
-  // const [dateFrom, setDateFrom] = useState('');
-  // const [dateTo, setDateTo] = useState('');
+  const [dateType, setDateType] = useState('StudyDate');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [emergencyCase, setEmergencyCase] = useState(false);
   const [mlcCase, setMlcCase] = useState(false);
   const [studyType, setStudyType] = useState('all');
@@ -83,7 +74,7 @@ const WorklistSearch = React.memo(({
     setStatusCounts(counts);
   }, [allStudies]);
 
-  // 🔧 SIMPLIFIED: Frontend filtering only for non-date filters
+  // 🔧 MEMOIZE FILTERED STUDIES - CRITICAL OPTIMIZATION
   const filteredStudies = useMemo(() => {
     let filtered = [...allStudies];
 
@@ -124,7 +115,7 @@ const WorklistSearch = React.memo(({
       filtered = filtered.filter(study => study.location === selectedLocation);
     }
 
-    // Advanced search filters (non-date)
+    // Advanced search filters
     if (patientName.trim()) {
       filtered = filtered.filter(study => 
         (study.patientName || '').toLowerCase().includes(patientName.toLowerCase())
@@ -155,8 +146,30 @@ const WorklistSearch = React.memo(({
       );
     }
 
-    // 🔧 REMOVED: Date filtering - now handled by backend
-    // Date filtering is now handled by the backend through API parameters
+    // Date range filter
+    if (dateFrom || dateTo) {
+      filtered = filtered.filter(study => {
+        let studyDate;
+        
+        if (dateType === 'StudyDate') {
+          studyDate = study.studyDate ? new Date(study.studyDate) : null;
+        } else if (dateType === 'UploadDate') {
+          studyDate = study.uploadDateTime ? new Date(study.uploadDateTime) : null;
+        } else if (dateType === 'DOB') {
+          studyDate = study.patientDateOfBirth ? new Date(study.patientDateOfBirth) : null;
+        }
+
+        if (!studyDate) return false;
+
+        const from = dateFrom ? new Date(dateFrom) : null;
+        const to = dateTo ? new Date(dateTo) : null;
+
+        if (from && studyDate < from) return false;
+        if (to && studyDate > to) return false;
+
+        return true;
+      });
+    }
 
     // Modality filter
     const selectedModalities = Object.entries(modalities)
@@ -191,8 +204,8 @@ const WorklistSearch = React.memo(({
   }, [
     allStudies, quickSearchTerm, searchType, selectedLocation, 
     patientName, patientId, refName, accessionNumber, description,
-    workflowStatus, modalities, emergencyCase, mlcCase, studyType
-    // 🔧 REMOVED: Date dependencies - now handled by backend
+    workflowStatus, dateType, dateFrom, dateTo, modalities, 
+    emergencyCase, mlcCase, studyType
   ]);
 
   // 🔧 DEBOUNCED SEARCH
@@ -203,45 +216,11 @@ const WorklistSearch = React.memo(({
     []
   );
 
-  // 🆕 NEW: Backend search with parameters
-  const handleBackendSearch = useCallback(() => {
-    if (!onSearchWithBackend) return;
-
-    const searchParams = {};
-    
-    // Add search filters
-    if (quickSearchTerm.trim()) {
-      searchParams.search = quickSearchTerm.trim();
-    }
-    
-    if (patientName.trim()) {
-      searchParams.patientName = patientName.trim();
-    }
-    
-    if (workflowStatus !== 'all') {
-      searchParams.status = workflowStatus;
-    }
-
-    // Add modality filters
-    const selectedModalities = Object.entries(modalities)
-      .filter(([key, value]) => value)
-      .map(([key]) => key);
-    
-    if (selectedModalities.length > 0) {
-      searchParams.modality = selectedModalities.join(',');
-    }
-
-    console.log('🔍 WORKLIST SEARCH: Triggering backend search with params:', searchParams);
-    onSearchWithBackend(searchParams);
-  }, [
-    quickSearchTerm, patientName, workflowStatus, modalities, onSearchWithBackend
-  ]);
-
   // 🔧 MEMOIZED CALLBACKS
   const handleQuickSearch = useCallback((e) => {
     e.preventDefault();
-    handleBackendSearch();
-  }, [handleBackendSearch]);
+    // Search happens automatically via memoized filteredStudies
+  }, []);
 
   const handleClear = useCallback(() => {
     setQuickSearchTerm('');
@@ -253,16 +232,9 @@ const WorklistSearch = React.memo(({
     setAccessionNumber('');
     setDescription('');
     setWorkflowStatus('all');
-    // 🔧 UPDATED: Clear date filters via props
-    if (onCustomDateChange) {
-      onCustomDateChange('', '');
-    }
-    if (onDateFilterChange) {
-      onDateFilterChange('last24h');
-    }
-    if (onDateTypeChange) {
-      onDateTypeChange('UploadDate');
-    }
+    setDateType('StudyDate');
+    setDateFrom('');
+    setDateTo('');
     setEmergencyCase(false);
     setMlcCase(false);
     setStudyType('all');
@@ -274,10 +246,7 @@ const WorklistSearch = React.memo(({
       PR: false,
       'CT\\SR': false
     });
-    
-    // Trigger backend refresh
-    handleBackendSearch();
-  }, [onCustomDateChange, onDateFilterChange, onDateTypeChange, handleBackendSearch]);
+  }, []);
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded(!isExpanded);
@@ -291,52 +260,47 @@ const WorklistSearch = React.memo(({
     }));
   }, []);
 
-  // 🔧 UPDATED: Quick date presets now use backend
+  // Quick date presets
   const setDatePreset = useCallback((preset) => {
-    console.log(`📅 WORKLIST SEARCH: Setting date preset to ${preset}`);
+    const today = new Date();
+    let from, to;
     
-    if (onDateFilterChange) {
-      onDateFilterChange(preset);
+    switch (preset) {
+      case 'today':
+        from = to = format(today, 'yyyy-MM-dd');
+        break;
+      case 'yesterday':
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        from = to = format(yesterday, 'yyyy-MM-dd');
+        break;
+      case 'thisWeek':
+        const weekStart = new Date(today);
+        weekStart.setDate(today.getDate() - today.getDay());
+        from = format(weekStart, 'yyyy-MM-dd');
+        to = format(today, 'yyyy-MM-dd');
+        break;
+      case 'thisMonth':
+        from = format(new Date(today.getFullYear(), today.getMonth(), 1), 'yyyy-MM-dd');
+        to = format(today, 'yyyy-MM-dd');
+        break;
     }
     
-    // For custom dates, set the values
-    if (preset === 'custom' && onCustomDateChange) {
-      const today = new Date();
-      let from, to;
-      
-      // You can set default custom date range here if needed
-      from = format(today, 'yyyy-MM-dd');
-      to = format(today, 'yyyy-MM-dd');
-      
-      onCustomDateChange(from, to);
-    }
-  }, [onDateFilterChange, onCustomDateChange]);
-
-  // 🆕 NEW: Handle custom date changes
-  const handleCustomDateFromChange = useCallback((value) => {
-    if (onCustomDateChange) {
-      onCustomDateChange(value, customDateTo);
-    }
-  }, [customDateTo, onCustomDateChange]);
-
-  const handleCustomDateToChange = useCallback((value) => {
-    if (onCustomDateChange) {
-      onCustomDateChange(customDateFrom, value);
-    }
-  }, [customDateFrom, onCustomDateChange]);
+    setDateFrom(from);
+    setDateTo(to);
+  }, []);
 
   // 🔧 MEMOIZE ACTIVE FILTERS CHECK
   const hasActiveFilters = useMemo(() => {
     const selectedModalityCount = Object.values(modalities).filter(Boolean).length;
     return quickSearchTerm || patientName || patientId || refName || accessionNumber || 
            description || selectedLocation !== 'ALL' || workflowStatus !== 'all' ||
-           emergencyCase || mlcCase || studyType !== 'all' || 
-           selectedModalityCount > 0 || dateFilter !== 'last24h' ||
-           (dateFilter === 'custom' && (customDateFrom || customDateTo));
+           dateFrom || dateTo || emergencyCase || mlcCase || studyType !== 'all' || 
+           selectedModalityCount > 0;
   }, [
     quickSearchTerm, patientName, patientId, refName, accessionNumber, description,
-    selectedLocation, workflowStatus, emergencyCase, mlcCase, 
-    studyType, modalities, dateFilter, customDateFrom, customDateTo
+    selectedLocation, workflowStatus, dateFrom, dateTo, emergencyCase, mlcCase, 
+    studyType, modalities
   ]);
 
   return (
@@ -359,7 +323,7 @@ const WorklistSearch = React.memo(({
             </div>
           )}
 
-          {/* Top Search Bar - remains the same */}
+          {/* Top Search Bar */}
           <div className="flex items-center space-x-3 flex-wrap gap-y-2">
             {/* Search Type Selector */}
             <div className="relative">
@@ -433,7 +397,7 @@ const WorklistSearch = React.memo(({
           </div>
         </div>
 
-        {/* Advanced Search Panel */}
+        {/* Advanced Search Panel - Only render when expanded */}
         {isExpanded && (
           <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl">
             <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-6 py-4 border-b border-gray-200 rounded-t-xl">
@@ -449,7 +413,7 @@ const WorklistSearch = React.memo(({
             
             <div className="p-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {/* Patient Info Section - remains the same */}
+                {/* Patient Info Section */}
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
                     Patient Info
@@ -486,7 +450,7 @@ const WorklistSearch = React.memo(({
                   </div>
                 </div>
 
-                {/* Study Info Section - remains the same */}
+                {/* Study Info Section */}
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
                     Study Info
@@ -527,17 +491,16 @@ const WorklistSearch = React.memo(({
                   </div>
                 </div>
 
-                {/* 🔧 UPDATED: Date Range & Other Filters */}
+                {/* Date Range & Other Filters */}
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-2">
                     Date Range
                   </h3>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Date Type</label>
                     <select
                       value={dateType}
-                      onChange={(e) => onDateTypeChange && onDateTypeChange(e.target.value)}
+                      onChange={(e) => setDateType(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-2"
                     >
                       <option value="StudyDate">Study Date</option>
@@ -545,60 +508,42 @@ const WorklistSearch = React.memo(({
                       <option value="DOB">DOB</option>
                     </select>
                     
-                    {/* 🔧 UPDATED: Quick Date Presets with backend integration */}
-                    <div className="flex flex-wrap gap-1 mb-2">
-                      {['today', 'yesterday', 'thisWeek', 'thisMonth', 'thisYear'].map(preset => (
+                    {/* Quick Date Presets */}
+                    <div className="flex space-x-1 mb-2">
+                      {['today', 'yesterday', 'thisWeek', 'thisMonth'].map(preset => (
                         <button
                           key={preset}
                           onClick={() => setDatePreset(preset)}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
-                            dateFilter === preset 
-                              ? 'bg-blue-500 text-white' 
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
+                          className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
                         >
                           {preset === 'today' ? 'Today' : 
                            preset === 'yesterday' ? 'Yesterday' :
-                           preset === 'thisWeek' ? 'This Week' : 
-                           preset === 'thisMonth' ? 'This Month' : 'This Year'}
+                           preset === 'thisWeek' ? 'This Week' : 'This Month'}
                         </button>
                       ))}
-                      <button
-                        onClick={() => setDatePreset('custom')}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${
-                          dateFilter === 'custom' 
-                            ? 'bg-purple-500 text-white' 
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
-                      >
-                        Custom
-                      </button>
                     </div>
                   </div>
                   
-                  {/* 🔧 UPDATED: Custom date inputs with backend integration */}
-                  {dateFilter === 'custom' && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">From</label>
-                        <input
-                          type="date"
-                          value={customDateFrom}
-                          onChange={(e) => handleCustomDateFromChange(e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">To</label>
-                        <input
-                          type="date"
-                          value={customDateTo}
-                          onChange={(e) => handleCustomDateToChange(e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        />
-                      </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">From</label>
+                      <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
                     </div>
-                  )}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">To</label>
+                      <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
 
                   {/* Modality Checkboxes */}
                   <div>
@@ -659,7 +604,7 @@ const WorklistSearch = React.memo(({
               </div>
             </div>
 
-            {/* 🔧 UPDATED: Action Buttons with backend search */}
+            {/* Action Buttons */}
             <div className="flex justify-between items-center border-t border-gray-200 p-4 bg-gray-50 rounded-b-xl">
               <div className="text-sm text-gray-600">
                 {hasActiveFilters ? `${filteredStudies.length} studies found` : 'No filters applied'}
@@ -672,10 +617,7 @@ const WorklistSearch = React.memo(({
                   Reset All
                 </button>
                 <button
-                  onClick={() => {
-                    handleBackendSearch();
-                    toggleExpanded();
-                  }}
+                  onClick={toggleExpanded}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors"
                 >
                   Search
@@ -696,9 +638,14 @@ const WorklistSearch = React.memo(({
         onAssignmentComplete={onAssignmentComplete}
         recordsPerPage={recordsPerPage}
         onRecordsPerPageChange={onRecordsPerPageChange}
-        usePagination={false}
       />
     </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.allStudies.length === nextProps.allStudies.length &&
+    prevProps.loading === nextProps.loading &&
+    JSON.stringify(prevProps.allStudies) === JSON.stringify(nextProps.allStudies)
   );
 });
 

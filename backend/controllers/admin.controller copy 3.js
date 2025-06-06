@@ -10,8 +10,6 @@ import mongoose from 'mongoose';
 import WasabiService from '../services/wasabi.service.js';
 import multer from 'multer';
 import sharp from 'sharp'; // For image optimization
-// import websocketService from '../config/webSocket.js'; // 🆕 ADD: Import WebSocket service
-
 
 // 🔧 PERFORMANCE: Advanced caching with different TTLs
 const cache = new NodeCache({ 
@@ -624,13 +622,14 @@ export const getPatientDetailedView = async (req, res) => {
             });
         }
 
-        // 🔧 OPTIMIZED: Parallel queries for better performance
-        const [patient, studies] = await Promise.all([
+        // 🔧 OPTIMIZED: Parallel queries for better performance - same as labEdit pattern
+        const [patient, allStudies] = await Promise.all([
             Patient.findOne({ patientID: patientId })
                 .populate('clinicalInfo.lastModifiedBy', 'fullName email')
                 .lean(),
             DicomStudy.find({ patientId: patientId })
-                .populate('sourceLab', 'name identifier')
+                .select('studyInstanceUID studyDate modality accessionNumber workflowStatus caseType examDescription examType sourceLab uploadedReports assignment reportFinalizedAt')
+                .populate('sourceLab', 'name')
                 .populate({
                     path: 'assignment.assignedTo',
                     select: 'specialization',
@@ -650,89 +649,161 @@ export const getPatientDetailedView = async (req, res) => {
             });
         }
 
-        // 🔧 OPTIMIZED: Get latest study efficiently
-        const latestStudy = studies.length > 0 ? studies[0] : null;
+        // 🔧 OPTIMIZED: Get current study efficiently
+        const currentStudy = allStudies.length > 0 ? allStudies[0] : null;
 
-        // 🔧 PERFORMANCE: Build response efficiently
-        const fullName = patient.computed?.fullName || 
-                         `${patient.firstName || ''} ${patient.lastName || ''}`.trim() || 'Unknown';
+        // 🔧 NEW: Extract study reports separately (don't merge) - following labEdit pattern
+        const studyReports = [];
+        allStudies.forEach(study => {
+            if (study.uploadedReports && study.uploadedReports.length > 0) {
+                study.uploadedReports.forEach(report => {
+                    studyReports.push({
+                        _id: report._id,
+                        fileName: report.filename,
+                        fileType: report.reportType || 'study-report',
+                        documentType: report.documentType || 'clinical',
+                        contentType: report.contentType,
+                        size: report.size,
+                        uploadedAt: report.uploadedAt,
+                        uploadedBy: report.uploadedBy,
+                        storageType: report.storageType || 'wasabi',
+                        wasabiKey: report.wasabiKey,
+                        wasabiBucket: report.wasabiBucket,
+                        reportStatus: report.reportStatus,
+                        studyId: study.studyInstanceUID,
+                        studyObjectId: study._id,
+                        source: 'study'
+                    });
+                });
+            }
+        });
 
-        const clinicalInfo = {
-            clinicalHistory: patient.medicalHistory?.clinicalHistory || patient.clinicalInfo?.clinicalHistory || '',
-            previousInjury: patient.medicalHistory?.previousInjury || patient.clinicalInfo?.previousInjury || '',
-            previousSurgery: patient.medicalHistory?.previousSurgery || patient.clinicalInfo?.previousSurgery || ''
-        };
+        console.log(`📋 Found ${patient.documents?.length || 0} patient documents and ${studyReports.length} study reports`);
 
-        // 🆕 NEW: Extract referring physician information from latest study
-        const referringPhysicianInfo = latestStudy ? {
-            name: latestStudy.referringPhysician?.name || latestStudy.referringPhysicianName || 'N/A',
-            institution: latestStudy.referringPhysician?.institution || 'N/A',
-            contactInfo: latestStudy.referringPhysician?.contactInfo || 'N/A',
-            // 🔧 FALLBACK: Use legacy field if new structure not available
-            displayName: latestStudy.referringPhysicianName || latestStudy.referringPhysician?.name || 'N/A'
-        } : {
-            name: 'N/A',
-            institution: 'N/A',
-            contactInfo: 'N/A',
-            displayName: 'N/A'
-        };
-
-        const visitInfo = latestStudy ? {
-            examType: latestStudy.examType || latestStudy.modality || 'N/A',
-            examDescription: latestStudy.examDescription || 'N/A',
-            caseType: latestStudy.caseType || 'ROUTINE',
-            studyStatus: latestStudy.workflowStatus || 'pending',
-            // 🔧 UPDATED: Use the new referring physician structure
-            referringPhysician: referringPhysicianInfo.displayName,
-            referringPhysicianDetails: referringPhysicianInfo, // 🆕 NEW: Full details
-            center: latestStudy.sourceLab?.name || 'N/A',
-            orderDate: latestStudy.createdAt,
-            studyDate: latestStudy.studyDate,
-            reportDate: latestStudy.reportFinalizedAt
-        } : null;
-
+        // 🔧 ENHANCED: Build response following labEdit pattern exactly
         const responseData = {
             patientInfo: {
                 patientId: patient.patientID,
-                fullName: fullName,
-                gender: patient.gender || 'N/A',
+                patientID: patient.patientID, // Add both for compatibility
+                fullName: patient.computed?.fullName || 
+                         `${patient.firstName || ''} ${patient.lastName || ''}`.trim() || 'Unknown',
+                firstName: patient.firstName || '',
+                lastName: patient.lastName || '',
                 age: patient.ageString || 'N/A',
+                gender: patient.gender || 'N/A',
                 dateOfBirth: patient.dateOfBirth || 'N/A',
                 contactPhone: patient.contactInformation?.phone || 'N/A',
-                contactEmail: patient.contactInformation?.email || 'N/A'
+                contactEmail: patient.contactInformation?.email || 'N/A',
+                mrn: patient.mrn || 'N/A'
             },
-            studyInfo: latestStudy ? {
-                studyId: latestStudy.studyInstanceUID,
-                accessionNumber: latestStudy.accessionNumber || 'N/A',
-                studyDate: latestStudy.studyDate,
-                modality: latestStudy.modality || 'N/A',
-                status: latestStudy.workflowStatus || 'pending',
-                assignedDoctor: latestStudy.assignment?.assignedTo?.userAccount?.fullName || 'Not Assigned',
-                priority: latestStudy.assignment?.priority || 'NORMAL',
-                reportAvailable: latestStudy.ReportAvailable || false,
-                // 🆕 NEW: Add referring physician to study info
-                referringPhysician: referringPhysicianInfo
+            
+            // 🔧 ENHANCED: Comprehensive clinical info
+            clinicalInfo: {
+                clinicalHistory: patient.clinicalInfo?.clinicalHistory || 
+                               patient.medicalHistory?.clinicalHistory || '',
+                previousInjury: patient.clinicalInfo?.previousInjury || 
+                              patient.medicalHistory?.previousInjury || '',
+                previousSurgery: patient.clinicalInfo?.previousSurgery || 
+                               patient.medicalHistory?.previousSurgery || '',
+                lastModifiedBy: patient.clinicalInfo?.lastModifiedBy || null,
+                lastModifiedAt: patient.clinicalInfo?.lastModifiedAt || null
+            },
+            
+            // 🔧 ENHANCED: Medical history for compatibility
+            medicalHistory: {
+                clinicalHistory: patient.medicalHistory?.clinicalHistory || 
+                               patient.clinicalInfo?.clinicalHistory || '',
+                previousInjury: patient.medicalHistory?.previousInjury || 
+                              patient.clinicalInfo?.previousInjury || '',
+                previousSurgery: patient.medicalHistory?.previousSurgery || 
+                               patient.clinicalInfo?.previousSurgery || ''
+            },
+            
+            // 🔧 ENHANCED: Study info with admin-specific details
+            studyInfo: currentStudy ? {
+                studyId: currentStudy.studyInstanceUID,
+                accessionNumber: currentStudy.accessionNumber || 'N/A',
+                studyDate: currentStudy.studyDate,
+                modality: currentStudy.modality || 'N/A',
+                status: currentStudy.workflowStatus || 'pending',
+                assignedDoctor: currentStudy.assignment?.assignedTo?.userAccount?.fullName || 'Not Assigned',
+                priority: currentStudy.assignment?.priority || 'NORMAL',
+                reportAvailable: (currentStudy.uploadedReports && currentStudy.uploadedReports.length > 0) || false,
+                caseType: currentStudy.caseType || 'routine',
+                workflowStatus: currentStudy.workflowStatus,
+                images: [] // For compatibility
             } : null,
-            clinicalInfo,
-            visitInfo,
-            // 🆕 NEW: Add referring physician as separate section
-            referringPhysicianInfo,
-            documents: patient.documents || [],
-            allStudies: studies.map(study => ({
+            
+            // 🔧 ENHANCED: Visit info
+            visitInfo: currentStudy ? {
+                examType: currentStudy.examType || currentStudy.modality || 'N/A',
+                examDescription: currentStudy.examDescription || 'N/A',
+                caseType: currentStudy.caseType?.toUpperCase() || 'ROUTINE',
+                studyStatus: currentStudy.workflowStatus || 'pending',
+                referringPhysician: currentStudy.referredBy || 'N/A',
+                center: currentStudy.sourceLab?.name || 'N/A',
+                orderDate: currentStudy.createdAt,
+                studyDate: currentStudy.studyDate,
+                reportDate: currentStudy.reportFinalizedAt
+            } : null,
+            
+            // 🔧 ENHANCED: All studies with admin details
+            allStudies: allStudies.map(study => ({
                 studyId: study.studyInstanceUID,
                 studyDate: study.studyDate,
                 modality: study.modality || 'N/A',
                 status: study.workflowStatus,
                 accessionNumber: study.accessionNumber || 'N/A',
-                // 🆕 NEW: Include referring physician in all studies
-                referringPhysician: study.referringPhysicianName || study.referringPhysician?.name || 'N/A'
-            }))
+                assignedDoctor: study.assignment?.assignedTo?.userAccount?.fullName || 'Not Assigned',
+                priority: study.assignment?.priority || 'NORMAL',
+                caseType: study.caseType || 'routine',
+                center: study.sourceLab?.name || 'N/A'
+            })),
+            
+            // 🔧 ENHANCED: Studies array for compatibility with existing components
+            studies: allStudies.map(study => ({
+                _id: study._id,
+                studyInstanceUID: study.studyInstanceUID,
+                accessionNumber: study.accessionNumber || 'N/A',
+                studyDateTime: study.studyDate,
+                modality: study.modality || 'N/A',
+                description: study.examDescription || '',
+                workflowStatus: study.workflowStatus,
+                priority: study.caseType?.toUpperCase() || 'ROUTINE',
+                location: study.sourceLab?.name || 'Default Lab',
+                assignedDoctor: study.assignment?.assignedTo?.userAccount?.fullName || 'Not Assigned',
+                reportFinalizedAt: study.reportFinalizedAt,
+                // Admin-specific fields
+                assignmentPriority: study.assignment?.priority || 'NORMAL',
+                assignedAt: study.assignment?.assignedAt,
+                specialization: study.assignment?.assignedTo?.specialization || 'N/A'
+            })),
+            
+            // 🔧 CRITICAL FIX: Use safe array access to prevent undefined errors
+            documents: patient.documents || [], // This prevents the "Cannot read properties of undefined" error
+            
+            // 🔧 NEW: Study reports as separate array (following labEdit pattern)
+            studyReports: studyReports,
+            
+            // 🔧 ENHANCED: Additional admin fields
+            referralInfo: patient.referralInfo || '',
+            
+            // 🔧 NEW: Admin-specific metadata
+            adminMetadata: {
+                totalStudies: allStudies.length,
+                totalReports: studyReports.length,
+                totalDocuments: (patient.documents || []).length,
+                latestStudyDate: currentStudy?.studyDate || null,
+                patientStatus: patient.currentWorkflowStatus || 'active',
+                lastUpdated: patient.updatedAt || patient.createdAt
+            }
         };
 
         // 🔧 PERFORMANCE: Cache the result
         cache.set(cacheKey, responseData, 300); // 5 minutes
 
         const processingTime = Date.now() - startTime;
+        console.log(`✅ Admin patient detailed view fetched successfully in ${processingTime}ms`);
 
         res.json({
             success: true,
@@ -744,11 +815,11 @@ export const getPatientDetailedView = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Error in getPatientDetailedView:', error);
+        console.error('❌ Error in admin getPatientDetailedView:', error);
         res.status(500).json({
             success: false,
             message: 'Error fetching patient details',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
@@ -872,188 +943,6 @@ export const assignDoctorToStudy = async (req, res) => {
         await session.endSession();
     }
 };
-
-// import websocketService from '../config/webSocket.js'; // 🆕 ADD: Import WebSocket service
-
-// // 🔧 ENHANCED: Assign doctor to study with WebSocket notification
-// export const assignDoctorToStudy = async (req, res) => {
-//     const session = await mongoose.startSession();
-    
-//     try {
-//         const result = await session.withTransaction(async () => {
-//             const { studyId } = req.params;
-//             const { doctorId, assignmentNote, priority = 'NORMAL' } = req.body;
-//             const assignedBy = req.user.id;
-
-//             console.log(`🔄 Assigning doctor ${doctorId} to study ${studyId}`);
-
-//             if (!studyId || !doctorId) {
-//                 throw new Error('Study ID and Doctor ID are required');
-//             }
-
-//             // 🔧 ENHANCED: Validate doctor and get full details
-//             const doctor = await Doctor.findById(doctorId)
-//                 .populate('userAccount', 'fullName email isActive')
-//                 .session(session);
-
-//             if (!doctor || !doctor.userAccount?.isActive) {
-//                 throw new Error('Doctor not found or inactive');
-//             }
-
-//             // 🔧 ENHANCED: Get study with full details for notification
-//             const study = await DicomStudy.findById(studyId)
-//                 .populate('patient', 'patientID patientNameRaw firstName lastName')
-//                 .populate('sourceLab', 'name identifier')
-//                 .session(session);
-
-//             if (!study) {
-//                 throw new Error('Study not found');
-//             }
-
-//             // Update study
-//             const currentTime = new Date();
-//             const assignmentData = {
-//                 'assignment.assignedTo': doctorId,
-//                 'assignment.assignedAt': currentTime,
-//                 'assignment.assignedBy': assignedBy,
-//                 'assignment.priority': priority,
-//                 'assignment.dueDate': new Date(Date.now() + 24 * 60 * 60 * 1000),
-//                 workflowStatus: 'assigned_to_doctor',
-//                 lastAssignedDoctor: doctorId,
-//                 lastAssignmentAt: currentTime,
-//                 $push: {
-//                     statusHistory: {
-//                         status: 'assigned_to_doctor',
-//                         changedAt: currentTime,
-//                         changedBy: assignedBy,
-//                         note: assignmentNote || `Assigned to Dr. ${doctor.userAccount.fullName}`
-//                     }
-//                 }
-//             };
-
-//             const updatedStudy = await DicomStudy.findByIdAndUpdate(
-//                 studyId,
-//                 assignmentData,
-//                 { 
-//                     session, 
-//                     new: true,
-//                     runValidators: false
-//                 }
-//             );
-
-//             if (!updatedStudy) {
-//                 throw new Error('Study not found');
-//             }
-
-//             // Calculate timing info
-//             if (updatedStudy.createdAt) {
-//                 const uploadToAssignmentMinutes = Math.floor(
-//                     (currentTime.getTime() - updatedStudy.createdAt.getTime()) / (1000 * 60)
-//                 );
-                
-//                 await DicomStudy.findByIdAndUpdate(
-//                     studyId,
-//                     {
-//                         'timingInfo.uploadToAssignmentMinutes': uploadToAssignmentMinutes
-//                     },
-//                     { session, runValidators: false }
-//                 );
-//             }
-
-//             // Update patient status
-//             if (updatedStudy.patient) {
-//                 await Patient.findByIdAndUpdate(
-//                     updatedStudy.patient,
-//                     {
-//                         currentWorkflowStatus: 'assigned_to_doctor',
-//                         'statusInfo.assignedDoctor': doctorId,
-//                         'statusInfo.lastStatusChange': currentTime
-//                     },
-//                     { session }
-//                 );
-//             }
-
-//             // Clear caches
-//             cache.del(`admin_patient_detail_${updatedStudy.patientId}`);
-//             cache.del(`doctor_workload_${doctorId}`);
-
-//             console.log('✅ Doctor assigned successfully');
-
-//             return {
-//                 studyId: updatedStudy.studyInstanceUID,
-//                 doctorName: doctor.userAccount.fullName,
-//                 assignedAt: currentTime,
-//                 priority: priority,
-//                 // 🆕 NEW: Add data for WebSocket notification
-//                 studyData: {
-//                     _id: study._id,
-//                     studyInstanceUID: study.studyInstanceUID,
-//                     patientName: study.patient?.patientNameRaw || 
-//                                `${study.patient?.firstName || ''} ${study.patient?.lastName || ''}`.trim() || 
-//                                'Unknown Patient',
-//                     patientId: study.patientId || study.patient?.patientID,
-//                     modality: study.modality,
-//                     studyDate: study.studyDate,
-//                     accessionNumber: study.accessionNumber,
-//                     seriesImages: study.seriesImages || '1/1',
-//                     sourceLab: study.sourceLab
-//                 },
-//                 doctorInfo: {
-//                     _id: doctor._id,
-//                     fullName: doctor.userAccount.fullName,
-//                     email: doctor.userAccount.email,
-//                     specialization: doctor.specialization
-//                 },
-//                 assignmentInfo: {
-//                     assignedBy: req.user, // Full user object for assignedBy
-//                     assignmentNote,
-//                     priority
-//                 }
-//             };
-//         });
-
-//         // 🆕 NEW: Send WebSocket notification to doctor AFTER successful transaction
-//         try {
-//             console.log('📢 Sending WebSocket notification to doctor...');
-            
-//             const notificationSent = await websocketService.notifyDoctorAssignment({
-//                 doctorId: result.doctorInfo._id,
-//                 studyData: result.studyData,
-//                 assignedBy: result.assignmentInfo.assignedBy,
-//                 priority: result.assignmentInfo.priority,
-//                 assignmentNote: result.assignmentInfo.assignmentNote
-//             });
-
-//             console.log(`📢 WebSocket notification ${notificationSent ? 'sent' : 'not sent'} to Dr. ${result.doctorInfo.fullName}`);
-            
-//         } catch (notificationError) {
-//             console.error('❌ Error sending WebSocket notification:', notificationError);
-//             // Don't fail the request if notification fails - assignment still succeeded
-//         }
-
-//         res.json({
-//             success: true,
-//             message: 'Doctor assigned successfully',
-//             data: {
-//                 studyId: result.studyId,
-//                 doctorName: result.doctorName,
-//                 assignedAt: result.assignedAt,
-//                 priority: result.priority,
-//                 notificationSent: true // Assume sent for response
-//             }
-//         });
-
-//     } catch (error) {
-//         console.error('❌ Error in assignDoctorToStudy:', error);
-//         res.status(500).json({
-//             success: false,
-//             message: error.message || 'Failed to assign doctor',
-//             error: process.env.NODE_ENV === 'development' ? error.message : undefined
-//         });
-//     } finally {
-//         await session.endSession();
-//     }
-// };
 
 // 🔧 FIXED: Get all doctors
 export const getAllDoctors = async (req, res) => {
@@ -1996,29 +1885,16 @@ export const updateDoctor = async (req, res) => {
             cache.del(`doctor_profile_${doctorId}`);
             cache.del('doctors_list_*');
 
-            // 🔧 NEW: Return updated doctor data
-            const updatedDoctor = await Doctor.findById(doctorId)
-                .populate('userAccount', 'fullName email username isActive isLoggedIn')
-                .lean();
-
-            return {
-                doctorId: updatedDoctor._id,
-                fullName: updatedDoctor.userAccount.fullName,
-                email: updatedDoctor.userAccount.email,
-                username: updatedDoctor.userAccount.username,
-                specialization: updatedDoctor.specialization,
-                licenseNumber: updatedDoctor.licenseNumber,
-                department: updatedDoctor.department || 'N/A',
-                experience: updatedDoctor.yearsOfExperience ? `${updatedDoctor.yearsOfExperience} years` : 'N/A',
-                yearsOfExperience: updatedDoctor.yearsOfExperience || 0,
-                qualifications: updatedDoctor.qualifications?.join(', ') || 'N/A',
-                contactPhone: updatedDoctor.contactPhoneOffice || 'N/A',
-                isActive: updatedDoctor.isActiveProfile && updatedDoctor.userAccount.isActive,
-                isLoggedIn: updatedDoctor.userAccount.isLoggedIn,
-                createdAt: updatedDoctor.createdAt,
-                updatedAt: updatedDoctor.updatedAt
-            };
+            return { doctorId, fullName };
         });
+
+        // Fetch updated doctor for response
+        const updatedDoctor = await Doctor.findById(req.params.doctorId)
+            .populate({
+                path: 'userAccount',
+                select: 'fullName email username isActive isLoggedIn'
+            })
+            .lean();
 
         res.json({
             success: true,
@@ -2105,12 +1981,12 @@ export const updateDoctor = async (req, res) => {
 //             const userResponse = userDocument[0].toObject();
 //             delete userResponse.password;
 
-//             // Send welcome email asynchronously
+//             // 🔧 PERFORMANCE: Send email asynchronously after transaction
 //             setImmediate(async () => {
-            //     await sendWelcomeEmail(email, fullName, staffUsername, password, 'doctor_account');
-            // });
+//                 await sendWelcomeEmail(email, fullName, username, password, 'doctor_account');
+//             });
 
-//             // Clear caches
+//             // 🔧 PERFORMANCE: Clear related caches
 //             cache.del('doctors_list_*');
 
 //             return {
@@ -2122,6 +1998,201 @@ export const updateDoctor = async (req, res) => {
 //         res.status(201).json({
 //             success: true,
 //             message: 'Doctor registered successfully. A welcome email with login credentials has been sent.'
+//         });
+
+//     } catch (error) {
+//         console.error('❌ Error registering doctor:', error);
+        
+//         if (error.name === 'ValidationError') {
+//             const messages = Object.values(error.errors).map(val => val.message);
+//             return res.status(400).json({ success: false, message: messages.join(', ') });
+//         }
+        
+//         res.status(500).json({ 
+//             success: false, 
+//             message: error.message || 'Server error during doctor registration.' 
+//         });
+//     } finally {
+//         await session.endSession();
+//     }
+// };
+
+
+
+// 🔧 Configure multer for signature upload
+
+// 🔧 MIDDLEWARE: Apply multer middleware for signature upload
+
+// 🔧 Configure multer for signature upload (keep existing)
+
+const signatureUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 2 * 1024 * 1024, // 2MB limit for signatures
+    },
+    fileFilter: (req, file, cb) => {
+        // Only allow image files
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed for signatures'), false);
+        }
+    }
+});
+
+// 🔧 ENHANCED: Backward compatible registerDoctor function
+// export const registerDoctor = async (req, res) => {
+//     console.log(req.body);
+//     const session = await mongoose.startSession();
+    
+//     try {
+//         await session.withTransaction(async () => {
+//             const {
+//                 username, email, fullName,
+//                 specialization, licenseNumber, department, qualifications, 
+//                 yearsOfExperience, contactPhoneOffice, isActiveProfile
+//             } = req.body;
+
+//             if (!username || !email || !fullName || !specialization || !licenseNumber) {
+//                 throw new Error('Username, email, fullName, specialization, and licenseNumber are required.');
+//             }
+
+//             const password = generateRandomPassword();
+
+//             // 🔧 OPTIMIZED: Parallel validation queries
+//             const [userExists, doctorWithLicenseExists] = await Promise.all([
+//                 User.findOne({ $or: [{ email }, { username }] }).session(session),
+//                 Doctor.findOne({ licenseNumber }).session(session)
+//             ]);
+
+//             if (userExists) {
+//                 throw new Error('User with this email or username already exists.');
+//             }
+//             if (doctorWithLicenseExists) {
+//                 throw new Error('A doctor with this license number already exists.');
+//             }
+
+//             // 🔧 PERFORMANCE: Create user and doctor profile in sequence
+//             const userDocument = await User.create([{
+//                 username, email, password, fullName, role: 'doctor_account'
+//             }], { session });
+
+//             // 🆕 NEW: Handle signature upload if provided (OPTIONAL - backward compatible)
+//             let signatureUrl = '';
+//             let signatureKey = '';
+            
+//             // 🔧 BACKWARD COMPATIBLE: Only process signature if file exists
+//             if (req.file) {
+//                 try {
+//                     console.log('📝 Processing doctor signature upload...');
+                    
+//                     // Check if WasabiService is available
+//                     if (typeof WasabiService === 'undefined') {
+//                         console.warn('⚠️ WasabiService not available, skipping signature upload');
+//                     } else {
+//                         // 🔧 OPTIMIZE: Resize and compress signature image
+//                         const optimizedSignature = await sharp(req.file.buffer)
+//                             .resize(400, 200, { // Standard signature size
+//                                 fit: 'contain',
+//                                 background: { r: 255, g: 255, b: 255, alpha: 1 }
+//                             })
+//                             .png({ quality: 90, compressionLevel: 6 })
+//                             .toBuffer();
+
+//                         // 🔧 UPLOAD: Store in Wasabi documents bucket
+//                         const signatureMetadata = {
+//                             doctorId: userDocument[0]._id,
+//                             licenseNumber: licenseNumber,
+//                             uploadedBy: req.user?._id || 'admin',
+//                             doctorName: fullName,
+//                             signatureType: 'medical_signature'
+//                         };
+
+//                         const signatureFileName = `signature_${licenseNumber}_${Date.now()}.png`;
+                        
+//                         const uploadResult = await WasabiService.uploadDocument(
+//                             optimizedSignature,
+//                             signatureFileName,
+//                             'signature',
+//                             signatureMetadata
+//                         );
+
+//                         if (uploadResult.success) {
+//                             signatureUrl = uploadResult.location;
+//                             signatureKey = uploadResult.key;
+//                             console.log(`✅ Signature uploaded successfully: ${signatureKey}`);
+//                         } else {
+//                             console.warn('⚠️ Signature upload failed, proceeding without signature');
+//                         }
+//                     }
+                    
+//                 } catch (signatureError) {
+//                     console.error('❌ Error uploading signature:', signatureError);
+//                     // Don't fail registration if signature upload fails
+//                     console.warn('⚠️ Continuing registration without signature');
+//                 }
+//             } else {
+//                 console.log('ℹ️ No signature file provided, proceeding with standard registration');
+//             }
+
+//             // 🔧 BACKWARD COMPATIBLE: Build doctor profile data
+//             const doctorProfileData = {
+//                 userAccount: userDocument[0]._id, 
+//                 specialization, 
+//                 licenseNumber, 
+//                 department,
+//                 qualifications, 
+//                 yearsOfExperience, 
+//                 contactPhoneOffice,
+//                 isActiveProfile: isActiveProfile !== undefined ? isActiveProfile : true
+//             };
+
+//             // 🆕 NEW: Only add signature fields if signature was uploaded
+//             if (signatureUrl) {
+//                 doctorProfileData.signature = signatureUrl;
+//                 doctorProfileData.signatureWasabiKey = signatureKey;
+//                 doctorProfileData.signatureMetadata = {
+//                     uploadedAt: new Date(),
+//                     fileSize: req.file?.size || 0,
+//                     originalName: req.file?.originalname || '',
+//                     mimeType: 'image/png'
+//                 };
+//             }
+
+//             const doctorProfile = await Doctor.create([doctorProfileData], { session });
+
+//             const userResponse = userDocument[0].toObject();
+//             delete userResponse.password;
+
+//             // 🔧 PERFORMANCE: Send email asynchronously after transaction
+//             setImmediate(async () => {
+//                 await sendWelcomeEmail(email, fullName, username, password, 'doctor_account');
+//             });
+
+//             // 🔧 PERFORMANCE: Clear related caches
+//             cache.del('doctors_list_*');
+
+//             return {
+//                 user: userResponse,
+//                 doctorProfile: doctorProfile[0].toObject(),
+//                 signatureUploaded: !!signatureUrl
+//             };
+//         });
+
+//         // 🔧 BACKWARD COMPATIBLE: Response message
+//         const baseMessage = 'Doctor registered successfully. A welcome email with login credentials has been sent.';
+//         const signatureMessage = req.file ? 
+//             (req.file && res.locals?.signatureUploaded !== false ? ' Signature uploaded successfully.' : ' Signature upload failed but registration completed.') : 
+//             '';
+
+//         res.status(201).json({
+//             success: true,
+//             message: baseMessage + signatureMessage,
+//             signatureUploaded: !!req.file,
+//             data: {
+//                 doctorRegistered: true,
+//                 signatureProcessed: !!req.file
+//             }
 //         });
 
 //     } catch (error) {

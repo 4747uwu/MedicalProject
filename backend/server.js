@@ -1,119 +1,186 @@
-// // index.js
-// import dotenv from 'dotenv';
-// import express from 'express';
-// import cors from 'cors';
-// import connectDB from './config/db.js'; // Note .js extension
-// import mongoose from 'mongoose'; // Import mongoose for ObjectId generation in controller
-// import cookieParser from 'cookie-parser';
-// import http from 'http';
-// import { startDicomScp } from './dicom/dicomHandler.js'; // Note .js extension
-
-
-// import orthancRoutes from './routes/orthanc.routes.js'; // Note .js extension
-// import authRoutes from './routes/auth.routes.js'; // Note .js extension
-// import adminRoutes from './routes/admin.routes.js'; // Note .js extension
-
-// dotenv.config();
-// connectDB();
-
-// const app = express();
-
-// app.use(cors({
-//     origin: true, // Allow any origin, or specify your frontend URL in production
-//     credentials: true, // Allow cookies to be sent with requests
-//     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-//     allowedHeaders: ['Content-Type', 'Authorization']
-//   }));
-  
-// app.use(express.json());
-// app.use(express.urlencoded({ extended: true }));
-// app.use(cookieParser());
-
-// app.get('/', (req, res) => {
-//     res.json({ message: 'DICOM Workflow API (MongoDB - Day 1 - ES Modules) is alive!' });
-// });
-
-
-// async function startServer() {
-//     // Start your HTTP/Express server
-//     app.listen(HTTP_PORT, () => {
-//       console.log(`HTTP server listening on port ${HTTP_PORT}`);
-//       console.log(`Orthanc API (example): http://localhost:${HTTP_PORT}/api/orthanc/status`);
-//     });
-  
-//     // Start the DICOM SCP server (runs in parallel)
-//     await startDicomScp();
-//   }
-  
-//   startServer().catch(err => {
-//     console.error("Failed to start main server:", err);
-//   });
-
-// // Mount Orthanc routes
-// app.use('/api/orthanc', orthancRoutes); // <<< THIS LINE REGISTERS THE ROUTES
-// app.use('/api/auth', authRoutes);
-// app.use('/api/admin', adminRoutes);
-
-
-// const PORT = process.env.PORT || 3000;
-// app.listen(PORT, () => {
-//     console.log(`Server is running as ES Module on port ${PORT}.`);
-// });
-
-
-// index.js
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
-import connectDB from './config/db.js'; // Note .js extension
-// import mongoose from 'mongoose'; // mongoose seems unused here directly, remove if not needed
+import helmet from 'helmet'; // ✅ ADD THIS
+import compression from 'compression'; // ✅ ADD THIS
+import connectDB from './config/db.js';
 import cookieParser from 'cookie-parser';
-// import http from 'http'; // http module seems unused, remove if not needed
-// import { startDicomScpTest } from './dicom/dicomHandler.js'; // Using the test version for now // Note .js extension
+import http from 'http';
 
-import orthancRoutes from './routes/orthanc.routes.js'; // Note .js extension
-import authRoutes from './routes/auth.routes.js'; // Note .js extension
-import adminRoutes from './routes/admin.routes.js'; // Note .js extension
+// Import all your routes
+import orthancRoutes from './routes/orthanc.routes.js';
+import authRoutes from './routes/auth.routes.js';
+import adminRoutes from './routes/admin.routes.js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import labRoutesEdit from './routes/labEdit.routes.js'; 
-import lab from './routes/lab.routes.js'; // Note .js extension
-import doctorRotues from './routes/doctor.routes.js'; // Note .js extension
+import lab from './routes/lab.routes.js';
+import doctorRotues from './routes/doctor.routes.js';
 import documentRoutes from './routes/document.routes.js'
-import studyDownloadRoutes from './routes/study.download.routes.js'; // Note .js extension
+import studyDownloadRoutes from './routes/study.download.routes.js';
 import changePasswordRoutes from './routes/changePassword.routes.js';
 import forgotPasswordRoutes from './routes/forgotPassword.routes.js';
 import reportRoutes from './routes/TAT.routes.js'
 import discussionRoutes from './routes/discussion.routes.js';
 import footer from './routes/footer.routes.js'
 import websocketService from './config/webSocket.js';
-import http from 'http'; // Import http for creating the server instance
-
+import radiantBridgeRoutes from './routes/radiantBridgeRoutes.js'; 
+import sharingRoutes from './routes/sharing.routes.js';
 
 dotenv.config();
-// connectDB(); // Call this inside startServer to ensure it's awaited if async
-connectDB(); // Connect to MongoDB before starting the server
+
+// Connect to MongoDB
+connectDB();
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Define PORT once, this will be our HTTP_PORT
-const server = http.createServer(app); // Create HTTP server instance
+const PORT = process.env.PORT || 3000;
+const server = http.createServer(app);
+
+// 🔧 PRODUCTION SECURITY MIDDLEWARE
+// ✅ 1. HELMET - Security headers
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "https:", "blob:"],
+            connectSrc: ["'self'", "ws:", "wss:", "https:"],
+            mediaSrc: ["'self'", "blob:"],
+            objectSrc: ["'none'"],
+            frameSrc: ["'none'"],
+        },
+    },
+    crossOriginEmbedderPolicy: false, // Disable for file downloads
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow cross-origin requests
+}));
+
+// ✅ 2. COMPRESSION - Gzip compression
+app.use(compression({
+    filter: (req, res) => {
+        // Don't compress if the request includes a cache-control no-transform directive
+        if (req.headers['cache-control'] && req.headers['cache-control'].includes('no-transform')) {
+            return false;
+        }
+        // Use compression filter
+        return compression.filter(req, res);
+    },
+    level: 6, // Compression level (1-9, 6 is default)
+    threshold: 1024 // Only compress if response is larger than 1KB
+}));
+
+// ✅ 3. PRODUCTION CORS - Secure CORS configuration
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+    ? [
+        process.env.FRONTEND_URL,
+        'https://your-frontend-domain.com', // Replace with your actual domain
+        'https://www.your-frontend-domain.com'
+      ]
+    : [
+        'http://localhost:3000',
+        'http://localhost:3001', 
+        'http://localhost:5173', // Vite dev server
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:5173'
+      ];
 
 app.use(cors({
-    origin: true, // Allow any origin, or specify your frontend URL in production
-    credentials: true, // Allow cookies to be sent with requests
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.warn(`🚨 CORS blocked origin: ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-  }));
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization',
+        'X-Requested-With',
+        'Accept',
+        'Origin',
+        'Cache-Control'
+    ],
+    exposedHeaders: ['Content-Disposition'], // ✅ IMPORTANT: Expose filename header
+    maxAge: 86400 // Cache preflight for 24 hours
+}));
 
+// ✅ 4. SECURITY MIDDLEWARE
 app.use(express.text());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ 
+    limit: '50mb', // Increased for medical images
+    verify: (req, res, buf) => {
+        req.rawBody = buf;
+    }
+}));
+app.use(express.urlencoded({ 
+    extended: true, 
+    limit: '50mb'
+}));
 app.use(cookieParser());
 
-app.get('/', (req, res) => {
-    res.json({ message: 'DICOM Workflow API (MongoDB - Day 1 - ES Modules) is alive!' });
+// ✅ 5. SECURITY HEADERS
+app.use((req, res, next) => {
+    // Remove server fingerprinting
+    res.removeHeader('X-Powered-By');
+    
+    // Add custom security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    
+    // HSTS in production
+    if (process.env.NODE_ENV === 'production') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
+    
+    next();
 });
 
-// Mount routes BEFORE starting the server (good practice, though not strictly required for listen)
+// ✅ 6. HEALTH CHECK ENDPOINTS
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        env: process.env.NODE_ENV || 'development',
+        version: process.env.npm_package_version || '1.0.0'
+    });
+});
+
+app.get('/ready', async (req, res) => {
+    try {
+        // Add your readiness checks here
+        res.status(200).json({ 
+            status: 'ready',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(503).json({ 
+            status: 'not ready', 
+            error: error.message 
+        });
+    }
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({ 
+        message: 'DICOM Workflow API is running!',
+        version: '1.0.0',
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ✅ 7. MOUNT ROUTES
 app.use('/api/orthanc', orthancRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
@@ -121,44 +188,69 @@ app.use('/api/labEdit', labRoutesEdit);
 app.use('/api/lab', lab);
 app.use('/api/doctor', doctorRotues);
 app.use('/api/documents', documentRoutes);
-app.use('/api/orthanc-download', studyDownloadRoutes); // Assuming you have a studyDownloadRoutes.js file
+app.use('/api/orthanc-download', studyDownloadRoutes);
 app.use('/api/auth', changePasswordRoutes);
 app.use('/api/forgot-password', forgotPasswordRoutes);
-app.use('/api/reports', reportRoutes); // Assuming you have a TAT.routes.js file
+app.use('/api/reports', reportRoutes);
 app.use('/api', discussionRoutes);
-app.use('/api/footer', footer); // Assuming you have a footer.routes.js file
+app.use('/api/footer', footer);
+app.use('/api/radiant', radiantBridgeRoutes); 
+app.use('/api/sharing', sharingRoutes);
 
+// ✅ 8. ERROR HANDLING MIDDLEWARE
+app.use((req, res, next) => {
+    res.status(404).json({
+        success: false,
+        message: `Route ${req.originalUrl} not found`,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.use((err, req, res, next) => {
+    console.error('Global error handler:', err);
+    
+    // Don't leak error details in production
+    const errorMessage = process.env.NODE_ENV === 'production' 
+        ? 'Internal server error' 
+        : err.message;
+    
+    const statusCode = err.statusCode || 500;
+    
+    res.status(statusCode).json({
+        success: false,
+        message: errorMessage,
+        ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ✅ 9. INITIALIZE WEBSOCKETS
 websocketService.initialize(server);
-app.use('/dicom-web', createProxyMiddleware({ 
-  
-  
-  target: 'http://localhost:8042',          // Your Orthanc server's base URL
-  // pathRewrite: { '^/dicom-web': '/dicom-web' }, // This specific rewrite is redundant if Orthanc's DICOMweb root IS /dicom-web
-  changeOrigin: true,                         // Good practice
-  auth: "alice:alicePassword",                // <<< This handles Basic Auth to Orthanc!
-  logLevel: 'debug',                          // For verbose proxy logging
-  onProxyReq: (proxyReq, req, res) => {
-    // Optional: Log the request being sent to Orthanc
-    console.log(`[Proxy] Sending request to Orthanc: ${req.method} ${proxyReq.getHeader('host')}${proxyReq.path}`);
-    console.log(`[Proxy] Authorization header sent: ${proxyReq.getHeader('Authorization')}`); // To confirm auth is being added
-  },
-  onProxyRes: (proxyRes, req, res) => {
-    console.log(`[Proxy] Received response from Orthanc: ${proxyRes.statusCode} for ${req.originalUrl}`);
-  },
-  onError: (err, req, res) => {
-    console.error('[Proxy] Error:', err.message);
-    if (res && !res.headersSent && res.writeHead) {
-        res.writeHead(502, { 'Content-Type': 'text/plain' });
-        res.end('Proxy error: Could not connect to Orthanc service.');
-    } else if (res && res.socket && !res.socket.destroyed) {
-        res.socket.end();
-    }
-  }
-}));
 
+// ✅ 10. GRACEFUL SHUTDOWN
+process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 SIGINT received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+});
+
+// ✅ 11. START SERVER
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔌 WebSocket available at ws://localhost:${PORT}/ws/admin`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🔌 WebSocket available at ws://localhost:${PORT}/ws/admin`);
+    console.log(`🏥 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔒 Security: Helmet + Compression enabled`);
+    console.log(`🌐 CORS: ${process.env.NODE_ENV === 'production' ? 'Production' : 'Development'} mode`);
 });
 
 

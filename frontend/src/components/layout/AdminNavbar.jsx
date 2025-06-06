@@ -34,7 +34,7 @@ const UniversalNavbar = () => {
     switch (currentUser?.role) {
       case 'admin':
         return {
-          title: 'MedPortal',
+          title: 'Star-Radiology',
           subtitle: 'Administration',
           brandColor: 'text-blue-500',
           accentColor: 'bg-blue-500',
@@ -49,7 +49,7 @@ const UniversalNavbar = () => {
         };
       case 'doctor_account':
         return {
-          title: 'MedPortal',
+          title: 'Star-Radiology',
           subtitle: 'Doctor Portal',
           brandColor: 'text-emerald-500',
           accentColor: 'bg-emerald-500',
@@ -64,7 +64,7 @@ const UniversalNavbar = () => {
         };
       case 'lab_staff':
         return {
-          title: 'MedPortal',
+          title: 'Star-Radiology',
           subtitle: 'Lab Portal',
           brandColor: 'text-orange-500',
           accentColor: 'bg-orange-500',

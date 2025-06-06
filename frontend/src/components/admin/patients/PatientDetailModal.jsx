@@ -56,7 +56,7 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
     try {
       let response;
       if (isLabStaff) {
-        response = await api.get(`/lab/patients/${patientId}/detailed-view`);
+        response = await api.get(`/labEdit/patients/${patientId}`);
       } else {
         response = await api.get(`/admin/patients/${patientId}/detailed-view`);
       }
@@ -88,9 +88,13 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
           previousInjury: data.clinicalInfo?.previousInjury || '',
           previousSurgery: data.clinicalInfo?.previousSurgery || ''
         },
+        // 🆕 ENHANCED: Referring physician information
         physicianInfo: {
           referringPhysician: data.visitInfo?.referringPhysician !== 'N/A' ? data.visitInfo?.referringPhysician : '',
-          referringPhysicianInfo: '',
+          // 🆕 NEW: Extract additional referring physician details
+          referringPhysicianName: data.referringPhysicians?.current?.name || data.visitInfo?.referringPhysicianDetails?.name || '',
+          referringPhysicianInstitution: data.referringPhysicians?.current?.institution || data.visitInfo?.referringPhysicianDetails?.institution || '',
+          referringPhysicianContact: data.referringPhysicians?.current?.contactInfo || data.visitInfo?.referringPhysicianDetails?.contactInfo || '',
           requestingPhysician: '',
           email: '',
           mobile: '',
@@ -144,28 +148,89 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
       return;
     }
     
+    
+    
     const formData = new FormData();
     formData.append('file', selectedFile);
+    formData.append('documentType', uploadType.toLowerCase());
     formData.append('type', uploadType);
-    formData.append('patientId', patientId);
+    
+    // 🔧 FIXED: Use the correct path to get study ID
+    let currentStudyId = null;
+    
+    // Method 1: From studies array (✅ This is where the data actually is)
+    if (patientDetails?.studies && patientDetails.studies.length > 0) {
+      currentStudyId = patientDetails.studies[0].studyInstanceUID;
+      console.log('🔬 Found study ID in studies[0]:', currentStudyId);
+    }
+    // Method 2: From studyInfo (fallback, currently undefined)
+    else if (patientDetails?.studyInfo?.studyId) {
+      currentStudyId = patientDetails.studyInfo.studyId;
+      console.log('🔬 Found study ID in studyInfo:', currentStudyId);
+    }
+    // Method 3: From allStudies (fallback, currently undefined)
+    else if (patientDetails?.allStudies && patientDetails.allStudies.length > 0) {
+      currentStudyId = patientDetails.allStudies[0].studyId;
+      console.log('🔬 Found study ID in allStudies[0]:', currentStudyId);
+    }
+    // Method 4: No study ID found
+    else {
+      console.log('⚠️ No study ID found anywhere, uploading as general document');
+    }
+    
+    if (currentStudyId) {
+      formData.append('studyId', currentStudyId);
+      console.log('🔬 Appending studyId to FormData:', currentStudyId);
+    }
+    
+    // 🔧 DEBUG: Log all FormData entries
+    console.log('🔧 FormData contents:');
+    for (let [key, value] of formData.entries()) {
+      console.log(`  ${key}:`, value);
+    }
     
     setUploading(true);
     
     try {
-      await api.post(`/labEdit/patients/${patientId}/documents`, formData, {
+      console.log('🔧 Uploading file:', {
+        fileName: selectedFile.name,
+        size: selectedFile.size,
+        type: selectedFile.type,
+        documentType: uploadType.toLowerCase(),
+        studyId: currentStudyId || 'none'
+      });
+
+      const response = await api.post(`/labEdit/patients/${patientId}/documents`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
-        }
+        },
+        timeout: 60000
       });
       
+      console.log('✅ Upload response:', response.data);
+      
+      if (response.data.document?.studyLinked) {
+        toast.success(`Document uploaded and linked to study ${response.data.document.studyId}`);
+      } else {
+        toast.success('Document uploaded successfully to cloud storage');
+      }
+      
       setSelectedFile(null);
-      document.querySelector('input[type="file"]').value = '';
-      toast.success('Document uploaded successfully');
-      fetchPatientDetails(); // Refresh data
+      const fileInput = document.querySelector('input[type="file"]');
+      if (fileInput) fileInput.value = '';
+      
+      await fetchPatientDetails();
       
     } catch (error) {
-      console.error('Error uploading file:', error);
-      toast.error('Failed to upload document');
+      console.error('❌ Error uploading file:', error);
+      
+      if (error.response?.status === 403) {
+        toast.error('Access denied. Please check your permissions.');
+      } else if (error.response?.status === 401) {
+        toast.error('Authentication required. Please log in again.');
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to upload document');
+      }
     } finally {
       setUploading(false);
     }
@@ -221,64 +286,111 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
     }
   };
 
-  const handleDeleteDocument = async (docIndex) => {
-    if (!canEdit) {
-      toast.error('You do not have permission to delete documents');
-      return;
-    }
-
-    if (!window.confirm('Are you sure you want to delete this document?')) {
-      return;
-    }
-
-    try {
-      await api.delete(`/labEdit/patients/${patientId}/documents/${docIndex}`);
-      toast.success('Document deleted successfully');
-      fetchPatientDetails(); // Refresh data
-    } catch (error) {
-      console.error('Error deleting document:', error);
-      toast.error('Failed to delete document');
-    }
+  // 🔧 NEW: Function to get all documents (patient + study)
+  const getAllDocuments = () => {
+    const patientDocs = patientDetails?.documents || [];
+    const studyReports = patientDetails?.studyReports || [];
+    
+    // Combine and sort by upload date
+    const allDocs = [
+      ...patientDocs.map(doc => ({ ...doc, source: 'patient' })),
+      ...studyReports.map(report => ({ ...report, source: 'study' }))
+    ].sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+    
+    return allDocs;
   };
 
-  const handleDownloadDocument = async (docIndex) => {
+  // 🔧 SIMPLIFIED: Single download function for all document types
+  const handleDownloadDocument = async (doc, index) => {
     if (!canDownload) {
       toast.error('You do not have permission to download documents');
       return;
     }
 
     try {
-      const response = await api.get(`/labEdit/patients/${patientId}/documents/${docIndex}/download`, {
-        responseType: 'blob'
-      });
+      console.log(`🔽 Downloading document:`, doc);
       
-      // Create blob URL and download
-      const blob = new Blob([response.data]);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
+      // 🔧 SIMPLE: Use a single download endpoint for all documents
+      let downloadUrl;
       
-      // Get filename from response headers or use default
-      const contentDisposition = response.headers['content-disposition'];
-      let filename = 'document';
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
+      if (doc.source === 'study') {
+        // For study documents, use the study report download endpoint
+        downloadUrl = `/labEdit/studies/${doc.studyId}/reports/${doc._id}/download`;
+      } else {
+        // For patient documents, find the actual index in patient.documents array
+        const patientDocIndex = patientDetails.documents.findIndex(d => d._id === doc._id);
+        if (patientDocIndex === -1) {
+          toast.error('Document not found in patient records');
+          return;
         }
+        downloadUrl = `/labEdit/patients/${patientId}/documents/${patientDocIndex}/download`;
       }
       
-      link.setAttribute('download', filename);
+      console.log(`🔗 Download URL: ${downloadUrl}`);
+      
+      const response = await api.get(downloadUrl, {
+        responseType: 'blob',
+        timeout: 30000
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', doc.fileName);
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
       
-      toast.success('Document downloaded successfully');
+      toast.success(`Downloaded: ${doc.fileName}`);
       
     } catch (error) {
-      console.error('Error downloading document:', error);
-      toast.error('Failed to download document');
+      console.error('❌ Error downloading document:', error);
+      toast.error(error.response?.data?.message || 'Failed to download document');
+    }
+  };
+
+  // 🔧 ENHANCED: Delete function (only for patient documents)
+  const handleDeleteDocument = async (doc, index) => {
+    if (!canEdit) {
+      toast.error('You do not have permission to delete documents');
+      return;
+    }
+
+    // Prevent deletion of study documents
+    if (doc.source === 'study') {
+      toast.error('Study reports cannot be deleted from here. They are managed through the study workflow.');
+      return;
+    }
+
+    const documentName = doc.fileName || `Document #${index + 1}`;
+
+    if (!window.confirm(`Are you sure you want to delete "${documentName}"?\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      console.log(`🗑️ Deleting patient document:`, doc);
+      
+      // Find the actual index in patient.documents
+      const patientDocIndex = patientDetails.documents.findIndex(d => d._id === doc._id);
+      
+      if (patientDocIndex === -1) {
+        toast.error('Document not found in patient records');
+        return;
+      }
+      
+      const response = await api.delete(`/labEdit/patients/${patientId}/documents/${patientDocIndex}`);
+      
+      console.log('✅ Delete response:', response.data);
+      toast.success(`Document "${documentName}" deleted successfully`);
+      
+      await fetchPatientDetails();
+      
+    } catch (error) {
+      console.error('❌ Error deleting document:', error);
+      toast.error(error.response?.data?.message || 'Failed to delete document');
     }
   };
 
@@ -547,12 +659,19 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
                       </div>
                       <div>
                         <label className="block text-xs mb-1">Referring Physician</label>
-                        <input 
-                          type="text" 
-                          className="w-full border p-1 text-sm bg-gray-100"
-                          value={patientDetails?.visitInfo?.referringPhysician || 'N/A'}
-                          readOnly
-                        />
+                        <div className="flex items-center">
+                          <input 
+                            type="text" 
+                            className="flex-1 border p-1 text-sm bg-gray-100"
+                            value={patientDetails?.visitInfo?.referringPhysician || 
+                                   patientDetails?.referringPhysicians?.current?.displayName || 
+                                   'N/A'}
+                            readOnly
+                          />
+                          {patientDetails?.referringPhysicians?.current?.hasDetails && (
+                            <span className="ml-2 text-green-600 text-xs">✓ Details Available</span>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <label className="block text-xs mb-1">Study Status</label>
@@ -569,57 +688,195 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
                 </div>
               </div>
 
-              {/* 🔧 NEW All Studies Section */}
-              {activeTab === 'studies' && (
-                <div className="p-4 border-t border-gray-200">
-                  <h2 className="text-gray-700 font-medium mb-4">All Studies for this Patient</h2>
-                  
-                  {patientDetails?.allStudies && patientDetails.allStudies.length > 0 ? (
+              {/* 🆕 NEW: Referring Physician Information Section - Always Visible */}
+              <div className="bg-blue-50 p-4 border-t border-gray-200">
+                <h2 className="text-gray-700 font-medium mb-4 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  Referring Physician Information
+                  {canEdit && <span className="text-green-600 text-sm ml-2">(Editable)</span>}
+                  {patientDetails?.referringPhysicians?.count > 1 && (
+                    <span className="bg-blue-500 text-white text-xs px-2 py-1 rounded ml-2">
+                      {patientDetails.referringPhysicians.count} physicians found
+                    </span>
+                  )}
+                </h2>
+                
+                {/* Current/Primary Referring Physician */}
+                <div className="grid grid-cols-4 gap-3 mb-4">
+                  <div>
+                    <label className="block text-xs mb-1 font-medium">Primary Referring Physician</label>
+                    <input 
+                      type="text" 
+                      className={`w-full border p-2 text-sm ${canEdit ? 'bg-white border-blue-300' : 'bg-gray-100'}`}
+                      value={editedData.physicianInfo.referringPhysicianName || editedData.physicianInfo.referringPhysician}
+                      onChange={(e) => handleInputChange('physicianInfo', 'referringPhysicianName', e.target.value)}
+                      readOnly={!canEdit}
+                      placeholder="Enter referring physician name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1 font-medium">Institution/Hospital</label>
+                    <input 
+                      type="text" 
+                      className={`w-full border p-2 text-sm ${canEdit ? 'bg-white border-blue-300' : 'bg-gray-100'}`}
+                      value={editedData.physicianInfo.referringPhysicianInstitution}
+                      onChange={(e) => handleInputChange('physicianInfo', 'referringPhysicianInstitution', e.target.value)}
+                      readOnly={!canEdit}
+                      placeholder="Enter institution name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1 font-medium">Contact Information</label>
+                    <input 
+                      type="text" 
+                      className={`w-full border p-2 text-sm ${canEdit ? 'bg-white border-blue-300' : 'bg-gray-100'}`}
+                      value={editedData.physicianInfo.referringPhysicianContact}
+                      onChange={(e) => handleInputChange('physicianInfo', 'referringPhysicianContact', e.target.value)}
+                      readOnly={!canEdit}
+                      placeholder="Phone/Email"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1 font-medium">Data Source</label>
+                    <span className={`inline-block w-full p-2 text-sm rounded ${
+                      patientDetails?.referringPhysicians?.current?.source === 'structured' ? 'bg-green-100 text-green-800' :
+                      patientDetails?.referringPhysicians?.current?.source === 'dicom_field' ? 'bg-blue-100 text-blue-800' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {patientDetails?.referringPhysicians?.current?.source === 'structured' ? '📋 Structured Data' :
+                       patientDetails?.referringPhysicians?.current?.source === 'dicom_field' ? '🏥 DICOM Field' :
+                       '❓ Manual Entry'}
+                    </span>
+                  </div>
+                </div>
+                
+                {/* All Referring Physicians (if multiple) */}
+                {patientDetails?.referringPhysicians?.all && patientDetails.referringPhysicians.all.length > 1 && (
+                  <div className="border-t border-blue-200 pt-4">
+                    <h3 className="text-gray-600 font-medium mb-3 flex items-center">
+                      <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.196-2.121A6.01 6.01 0 0017 20zm-3-4a3 3 0 100-6 3 3 0 000 6zm-8 4h8v-2a3 3 0 00-3-3H6a3 3 0 00-3 3v2zM9 12a3 3 0 100-6 3 3 0 000 6z" />
+                      </svg>
+                      All Referring Physicians for This Patient
+                    </h3>
                     <div className="overflow-x-auto">
                       <table className="w-full border border-gray-300 text-sm">
                         <thead>
-                          <tr className="bg-gray-700 text-white">
-                            <th className="p-2 text-left border border-gray-300">Study Date</th>
-                            <th className="p-2 text-left border border-gray-300">Modality</th>
-                            <th className="p-2 text-left border border-gray-300">Accession Number</th>
+                          <tr className="bg-blue-600 text-white">
+                            <th className="p-2 text-left border border-gray-300">Physician Name</th>
+                            <th className="p-2 text-left border border-gray-300">Institution</th>
+                            <th className="p-2 text-left border border-gray-300">Contact</th>
+                            <th className="p-2 text-left border border-gray-300">Source</th>
                             <th className="p-2 text-left border border-gray-300">Status</th>
-                            <th className="p-2 text-left border border-gray-300">Study ID</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {patientDetails.allStudies.map((study, index) => (
-                            <tr key={study.studyId} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                              <td className="p-2 border border-gray-300">{formatDate(study.studyDate)}</td>
-                              <td className="p-2 border border-gray-300">
-                                <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-indigo-100 text-indigo-800">
-                                  {study.modality || 'N/A'}
-                                </span>
+                          {patientDetails.referringPhysicians.all.map((physician, index) => (
+                            <tr key={index} className={`${index % 2 === 0 ? 'bg-blue-25' : 'bg-white'} hover:bg-blue-50`}>
+                              <td className="p-2 border border-gray-300 font-medium">
+                                {physician.displayName || physician.name || 'N/A'}
                               </td>
-                              <td className="p-2 border border-gray-300">{study.accessionNumber || 'N/A'}</td>
+                              <td className="p-2 border border-gray-300">
+                                {physician.institution || 'N/A'}
+                              </td>
+                              <td className="p-2 border border-gray-300">
+                                {physician.contactInfo || 'N/A'}
+                              </td>
                               <td className="p-2 border border-gray-300">
                                 <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
-                                  study.status === 'report_finalized' ? 'bg-green-100 text-green-800' :
-                                  study.status === 'assigned_to_doctor' ? 'bg-yellow-100 text-yellow-800' :
-                                  'bg-blue-100 text-blue-800'
+                                  physician.source === 'structured' ? 'bg-green-100 text-green-800' :
+                                  physician.source === 'dicom_field' ? 'bg-blue-100 text-blue-800' :
+                                  'bg-gray-100 text-gray-600'
                                 }`}>
-                                  {formatWorkflowStatus(study.status)}
+                                  {physician.source === 'structured' ? '📋 Structured' :
+                                   physician.source === 'dicom_field' ? '🏥 DICOM' :
+                                   '❓ Unknown'}
                                 </span>
                               </td>
-                              <td className="p-2 border border-gray-300 text-xs font-mono">
-                                {study.studyId}
+                              <td className="p-2 border border-gray-300">
+                                {index === 0 ? (
+                                  <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
+                                    ⭐ Primary
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                                    Historical
+                                  </span>
+                                )}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      <p>No studies found for this patient</p>
+                  </div>
+                )}
+                
+                {/* No Referring Physician Found */}
+                {(!patientDetails?.referringPhysicians?.current?.hasDetails && 
+                  !editedData.physicianInfo.referringPhysicianName && 
+                  !editedData.physicianInfo.referringPhysician) && (
+                  <div className="text-center py-6 text-gray-500 border-2 border-dashed border-gray-300 rounded-lg">
+                    <svg className="w-12 h-12 mx-auto text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    <p className="text-lg font-medium">No Referring Physician Information</p>
+                    <p className="text-sm mt-1">
+                      {canEdit ? 'You can add referring physician information using the form above' : 'No referring physician data available'}
+                    </p>
+                    {canEdit && (
+                      <button 
+                        className="mt-3 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded text-sm"
+                        onClick={() => {
+                          setEditedData(prev => ({
+                            ...prev,
+                            physicianInfo: {
+                              ...prev.physicianInfo,
+                              referringPhysicianName: 'Dr. '
+                            }
+                          }));
+                        }}
+                      >
+                        Add Referring Physician
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 🔧 UPDATED STUDY INFORMATION SECTION - SHOW REFERRING PHYSICIAN MORE PROMINENTLY */}
+              <div className="bg-white p-4 border-t border-gray-200">
+                <h2 className="text-gray-700 font-medium mb-4">
+                  Study Information
+                  {canEdit && <span className="text-green-600 text-sm ml-2">(Editable)</span>}
+                </h2>
+                
+                <div className="grid grid-cols-5 gap-3 text-sm">
+                  {/* Existing fields... */}
+                  
+                  {/* Referring Physician (Prominent) */}
+                  <div>
+                    <label className="block text-xs mb-1">Referring Physician</label>
+                    <div className="flex items-center">
+                      <input 
+                        type="text" 
+                        className="flex-1 border p-1 text-sm bg-gray-100"
+                        value={patientDetails?.visitInfo?.referringPhysician || 
+                               patientDetails?.referringPhysicians?.current?.displayName || 
+                               'N/A'}
+                        readOnly
+                      />
+                      {patientDetails?.referringPhysicians?.current?.hasDetails && (
+                        <span className="ml-2 text-green-600 text-xs">✓ Details Available</span>
+                      )}
                     </div>
-                  )}
+                  </div>
+                  
+                  {/* Other fields... */}
                 </div>
-              )}
+              </div>
 
               {/* Rest of your existing sections (Clinical Information, etc.) */}
               {activeTab === 'clinical' && (
@@ -760,49 +1017,114 @@ const PatientDetailModal = ({ isOpen, onClose, patientId }) => {
                           </div>
                         )}
                         
+                        {/* 🔧 UPDATED: Documents table to use getAllDocuments() */}
                         <table className="w-full border text-sm">
                           <thead>
                             <tr className="bg-gray-700 text-white">
                               <th className="p-2 text-left">File</th>
                               <th className="p-2 text-left">Type</th>
+                              <th className="p-2 text-left">Source</th>
+                              <th className="p-2 text-left">Study Link</th>
                               <th className="p-2 text-left">Uploaded</th>
                               <th className="p-2 text-left">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {patientDetails?.documents && patientDetails.documents.length > 0 ? (
-                              patientDetails.documents.map((doc, index) => (
-                                <tr key={index} className="hover:bg-gray-100">
-                                  <td className="p-2">{doc.fileName}</td>
-                                  <td className="p-2">{doc.fileType}</td>
-                                  <td className="p-2 text-xs">
-                                    {doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : 'N/A'}
-                                    <br />
-                                    <span className="text-gray-500">{doc.uploadedBy}</span>
+                            {getAllDocuments().length > 0 ? (
+                              getAllDocuments().map((doc, index) => (
+                                <tr key={`${doc.source}-${doc._id}-${index}`} className="hover:bg-gray-100">
+                                  <td className="p-2">
+                                    <div className="flex items-center">
+                                      {/* File type icon */}
+                                      <span className="mr-2">
+                                        {doc.contentType?.includes('pdf') ? '📄' : 
+                                         doc.contentType?.includes('image') ? '🖼️' : 
+                                         doc.contentType?.includes('word') ? '📝' : '📁'}
+                                      </span>
+                                      <div>
+                                        <div className="font-medium">{doc.fileName}</div>
+                                        <div className="text-xs text-gray-500">
+                                          {doc.size ? `${(doc.size / 1024).toFixed(1)} KB` : 'Size unknown'}
+                                        </div>
+                                      </div>
+                                    </div>
                                   </td>
                                   <td className="p-2">
-                                    {canDownload && (
-                                      <button 
-                                        className="text-blue-600 hover:underline mr-2 text-sm"
-                                        onClick={() => handleDownloadDocument(index)}
-                                      >
-                                        Download
-                                      </button>
+                                    <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                                      doc.documentType === 'clinical' || doc.fileType === 'Clinical' ? 'bg-blue-100 text-blue-800' :
+                                      doc.fileType === 'Radiology' ? 'bg-green-100 text-green-800' :
+                                      doc.fileType === 'uploaded-report' ? 'bg-purple-100 text-purple-800' :
+                                      doc.fileType === 'Lab' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-gray-100 text-gray-800'
+                                    }`}>
+                                      {doc.fileType === 'uploaded-report' ? 'Study Report' : 
+                                       (doc.documentType || doc.fileType || 'Unknown')}
+                                    </span>
+                                  </td>
+                                  <td className="p-2">
+                                    <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                                      doc.source === 'study' ? 'bg-indigo-100 text-indigo-800' : 'bg-gray-100 text-gray-600'
+                                    }`}>
+                                      {doc.source === 'study' ? '🔬 Study Report' : '📋 Patient Document'}
+                                    </span>
+                                  </td>
+                                  <td className="p-2">
+                                    {doc.studyId ? (
+                                      <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800" title={doc.studyId}>
+                                        🔗 {doc.studyId.substring(0, 20)}...
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                                        No Study Link
+                                      </span>
                                     )}
-                                    {canEdit && (
-                                      <button 
-                                        className="text-red-600 hover:underline text-sm"
-                                        onClick={() => handleDeleteDocument(index)}
-                                      >
-                                        Delete
-                                      </button>
-                                    )}
+                                  </td>
+                                  <td className="p-2 text-xs">
+                                    <div>{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString('en-GB') : 'N/A'}</div>
+                                    <div className="text-gray-500">
+                                      {doc.uploadedBy || 'Unknown user'}
+                                    </div>
+                                  </td>
+                                  <td className="p-2">
+                                    <div className="flex space-x-2">
+                                      {canDownload && (
+                                        <button 
+                                          className="text-blue-600 hover:text-blue-800 text-sm font-medium transition-colors"
+                                          onClick={() => handleDownloadDocument(doc, index)}
+                                          title="Download document"
+                                        >
+                                          Download
+                                        </button>
+                                      )}
+                                      {canEdit && doc.source === 'patient' && (
+                                        <button 
+                                          className="text-red-600 hover:text-red-800 text-sm font-medium transition-colors"
+                                          onClick={() => handleDeleteDocument(doc, index)}
+                                          title="Delete document"
+                                        >
+                                          Delete
+                                        </button>
+                                      )}
+                                      {doc.source === 'study' && (
+                                        <span className="text-gray-500 text-sm" title="Study reports are managed through the study workflow">
+                                          Study Managed
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               ))
                             ) : (
-                              <tr className="bg-yellow-100">
-                                <td className="p-2 text-center" colSpan="4">No Clinical Attachments Found</td>
+                              <tr className="bg-yellow-50">
+                                <td className="p-4 text-center text-gray-600" colSpan="6">
+                                  <div className="flex flex-col items-center">
+                                    <svg className="w-8 h-8 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                    <span>No Documents Found</span>
+                                    <span className="text-sm text-gray-500 mt-1">Upload documents using the form above</span>
+                                  </div>
+                                </td>
                               </tr>
                             )}
                           </tbody>
