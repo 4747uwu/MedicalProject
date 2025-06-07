@@ -48,6 +48,7 @@ const DicomStudySchema = new mongoose.Schema({
             'assigned_to_doctor',
             'doctor_opened_report',
             'report_in_progress',
+            'report_drafted',          // 🆕 NEW: When report is uploaded as draft
             'report_finalized',
             'report_uploaded',
             'report_downloaded_radiologist',
@@ -67,6 +68,7 @@ const DicomStudySchema = new mongoose.Schema({
             'assigned_to_doctor',
             'doctor_opened_report',
             'report_in_progress',
+            'report_drafted',          // 🆕 NEW: When report is uploaded as draft
             'report_finalized',
             'report_uploaded',
             'report_downloaded_radiologist',
@@ -267,6 +269,24 @@ DicomStudySchema.index({ sourceLab: 1, workflowStatus: 1, studyDate: -1 }); // L
 DicomStudySchema.index({ modality: 1, studyDate: -1 }); // Modality reports
 DicomStudySchema.index({ 'assignment.priority': 1, workflowStatus: 1 }); // Priority queue
 DicomStudySchema.index({ studyDate: -1, createdAt: -1 }); // Time-based queries
+
+// 🔧 CRITICAL: Indexes for progressive data buildup
+DicomStudySchema.index({ createdAt: -1 }); // Primary time-based queries
+DicomStudySchema.index({ createdAt: -1, workflowStatus: 1 }); // Time + status (most common)
+DicomStudySchema.index({ createdAt: -1, sourceLab: 1 }); // Time + lab filtering
+DicomStudySchema.index({ studyDate: -1, workflowStatus: 1 }); // Study date queries
+DicomStudySchema.index({ workflowStatus: 1, createdAt: -1 }); // Status-first queries
+
+// 🔧 PERFORMANCE: Sparse indexes for specific scenarios
+DicomStudySchema.index({ 
+    'assignment.assignedTo': 1, 
+    workflowStatus: 1, 
+    createdAt: -1 
+}, { sparse: true }); // Doctor assignment queries
+
+DicomStudySchema.index({ 
+    studyInstanceUID: 1 
+}, { unique: true, sparse: true }); // Exact study lookups
 
 // 🔧 PERFORMANCE: Limit status history to prevent document bloat
 DicomStudySchema.pre('save', function(next) {
