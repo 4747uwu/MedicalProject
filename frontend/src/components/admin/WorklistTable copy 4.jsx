@@ -55,6 +55,10 @@ const StatusDot = React.memo(({ status, priority }) => {
         color = 'bg-orange-500';
         tooltipText = 'Report in Progress - Doctor is reviewing study';
         break;
+      case 'report_drafted':          // 🆕 NEW: Draft report status
+        color = 'bg-amber-700';       // Brown color for draft reports
+        tooltipText = 'Report Drafted - Report uploaded as draft, pending finalization';
+        break;
       case 'report_finalized':
       case 'report_uploaded':
         color = 'bg-blue-500';
@@ -723,7 +727,7 @@ const WorklistTable = React.memo(({
   onRecordsPerPageChange,
   usePagination = false // 🔧 DEFAULT: Single page mode
 }) => {
-  const [activeTab, setActiveTab] = useState('all');
+  const [activeTab, setActiveTab] = useState('pending');
   const [selectedStudies, setSelectedStudies] = useState([]);
 
   // Column visibility with defaults
@@ -1093,12 +1097,11 @@ const WorklistTable = React.memo(({
           </th>
         )}
         {/* 🆕 NEW: Share column header */}
-        {(visibleColumns.shareBtn || true) && (  // 🔧 Added || true to force visibility
-  <th className="w-10 px-1 py-2 text-center text-xs font-bold text-gray-700 uppercase tracking-wider border-r border-gray-300">
-    🔗
-  </th>
-)}
-
+        {visibleColumns.shareBtn && (
+          <th className="w-10 px-1 py-2 text-center text-xs font-bold text-gray-700 uppercase tracking-wider border-r border-gray-300">
+            🔗
+          </th>
+        )}
         {visibleColumns.discussion && (
           <th className="w-10 px-1 py-2 text-center text-xs font-bold text-gray-700 uppercase tracking-wider border-r border-gray-300">
             💬
@@ -1536,11 +1539,11 @@ const StudyRow = React.memo(({
       )}
 
       {/* 🆕 NEW: Share Button Column */}
-      {(visibleColumns.shareBtn || true) && (  // 🔧 Added || true to force visibility
-  <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
-    <ShareButton study={study} />
-  </td>
-)}
+      {visibleColumns.shareBtn && (
+        <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
+          <ShareButton study={study} />
+        </td>
+      )}
 
       {visibleColumns.discussion && (
         <td className={`px-1 py-2 text-center border-r ${isEmergency ? 'border-red-200' : 'border-gray-200'}`}>
