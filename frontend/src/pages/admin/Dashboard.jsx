@@ -21,7 +21,7 @@ const AdminDashboard = React.memo(() => {
   const [totalRecords, setTotalRecords] = useState(0);
   
   // 🆕 NEW: Date filter state for backend integration
-  const [dateFilter, setDateFilter] = useState('last24h'); // Default to 24 hours
+  const [dateFilter, setDateFilter] = useState('today'); // Default to 24 hours
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
   const [dateType, setDateType] = useState('UploadDate'); // StudyDate, UploadDate

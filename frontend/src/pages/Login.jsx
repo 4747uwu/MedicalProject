@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { Link } from 'react-router-dom';
 import LoginSlideshow from './LoginSlideShow';
+import logoImage from '../assets/starradiology_logo-1 (1).png';
+import ShinyText from '../components/creative/shinnyText';
 
 const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -88,14 +90,32 @@ const LoginPage = () => {
 
           {/* Enhanced form header */}
           <div className="mb-8 text-center">
+            {/* 🎨 Morphing border logo */}
             <div className="relative inline-block mb-6">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl blur opacity-75 animate-pulse"></div>
-              <div className="relative p-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 shadow-xl">
-                {/* <svg className="w-8 h-8 text-white mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                </svg> */}
+              {/* Morphing background shapes */}
+              <div className="absolute inset-0 animate-morph-1">
+                <div className="absolute inset-0 rounded-3xl bg-gradient-to-r from-blue-400 to-purple-500 opacity-20 blur-sm"></div>
+              </div>
+              <div className="absolute inset-0 animate-morph-2">
+                <div className="absolute inset-0 rounded-full bg-gradient-to-r from-purple-400 to-pink-500 opacity-15 blur-md"></div>
+              </div>
+              <div className="absolute inset-0 animate-morph-3">
+                <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 opacity-25 blur-lg"></div>
+              </div>
+              
+              {/* Animated border lines */}
+              <div className="absolute inset-0 rounded-2xl border-2 border-transparent bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-border animate-border-dance"></div>
+              
+              {/* Logo container */}
+              <div className="relative p-4 rounded-2xl bg-white shadow-xl backdrop-blur-sm">
+                <img 
+                  src={logoImage} 
+                  alt="Star Radiology Logo" 
+                  className="h-16 w-auto mx-auto object-contain relative z-10 filter drop-shadow-md"
+                />
               </div>
             </div>
+            
             <h2 className="text-3xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-2">
               Welcome Back
             </h2>
@@ -300,7 +320,7 @@ const LoginPage = () => {
             </div>
           </form>
 
-          {/* Enhanced Create account link */}
+          {/* 🆕 ADD: Shiny "Powered by XCENTIC" text */}
           
 
           {/* Enhanced Support contact */}
@@ -312,6 +332,17 @@ const LoginPage = () => {
                 </svg>
                 <span>Need help? <a href="#" className="text-blue-600 font-medium hover:text-blue-700 transition-colors">Contact support</a></span>
               </div>
+            </div>
+          </div>
+
+          <div className="mt-8 mb-6 flex items-center justify-center">
+            <div className="flex items-center space-x-2">
+              <span className="text-gray-400 text-sm">Powered by</span>
+              <ShinyText 
+                text="XCENTIC" 
+                speed={3}
+                className="text-lg font-bold tracking-wider"
+              />
             </div>
           </div>
         </div>

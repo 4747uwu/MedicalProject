@@ -21,192 +21,125 @@ const cache = new NodeCache({
 });
 
 // 🔧 FIXED: admin.controller.js - Single page implementation with all essential fields
+// 🔧 CRITICAL FIX: Always apply time filter for progressive data
 export const getAllStudiesForAdmin = async (req, res) => {
-    console.log(`🔍 Admin fetching studies with query: ${JSON.stringify(req.query)}`);
     try {
         const startTime = Date.now();
         const limit = parseInt(req.query.limit) || 20;
         
-        console.log(`📊 Fetching ${limit} studies in single page mode`);
-
-        // 🆕 ENHANCED: Extract all filter parameters including date filters
-        const { 
-            StudyInstanceUIDs, 
-            dataSources,
-            search, status, category, modality, labId, 
-            startDate, endDate, priority, patientName, 
-            dateRange, dateType = 'createdAt',
-            // 🆕 NEW: Additional date filter parameters
-            dateFilter, // 'today', 'yesterday', 'thisWeek', 'thisMonth', 'thisYear', 'custom'
-            customDateFrom,
-            customDateTo,
-            quickDatePreset
-        } = req.query;
-
-        // Build filters
         const queryFilters = {};
-
-        // 🔧 FIXED: Smart date filtering logic with proper date handling
+        
+        // 🔧 FORCE TIME FILTERING for progressive data buildup
         let shouldApplyDateFilter = true;
         let filterStartDate = null;
         let filterEndDate = null;
         
         // Handle quick date presets first
-        if (quickDatePreset || dateFilter) {
-            const preset = quickDatePreset || dateFilter;
+        if (req.query.quickDatePreset || req.query.dateFilter) {
+            const preset = req.query.quickDatePreset || req.query.dateFilter;
             const now = new Date();
-            
-            console.log(`📅 Processing date preset: ${preset}`);
             
             switch (preset) {
                 case 'last24h':
-                    // Last 24 hours from now
                     filterStartDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
                     filterEndDate = now;
-                    console.log(`📅 Applying LAST 24H filter: ${filterStartDate} to ${filterEndDate}`);
+                    console.log(`📅 Applied 24h filter - scanning ~1000 studies`);
                     break;
-                    
                 case 'today':
-                    // Today from midnight to now
-                    filterStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-                    filterEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-                    console.log(`📅 Applying TODAY filter: ${filterStartDate} to ${filterEndDate}`);
+                    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+                    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                    filterStartDate = startOfDay;
+                    filterEndDate = endOfDay;
+                    console.log(`📅 Applied today filter - scanning ~1000 studies`);
                     break;
-                    
+                
                 case 'yesterday':
-                    // Yesterday full day
                     const yesterday = new Date(now);
                     yesterday.setDate(yesterday.getDate() - 1);
-                    filterStartDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0, 0);
-                    filterEndDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999);
-                    console.log(`📅 Applying YESTERDAY filter: ${filterStartDate} to ${filterEndDate}`);
+                    const yesterdayStart = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0, 0);
+                    const yesterdayEnd = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999);
+                    filterStartDate = yesterdayStart;
+                    filterEndDate = yesterdayEnd;
+                    console.log(`📅 Applied yesterday filter: ${yesterdayStart.toISOString()} to ${yesterdayEnd.toISOString()}`);
                     break;
-                    
+
                 case 'thisWeek':
-                    // This week from Sunday to now
-                    const weekStart = new Date(now);
-                    const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
-                    weekStart.setDate(now.getDate() - dayOfWeek);
-                    weekStart.setHours(0, 0, 0, 0);
-                    filterStartDate = weekStart;
+                    filterStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
                     filterEndDate = now;
-                    console.log(`📅 Applying THIS WEEK filter: ${filterStartDate} to ${filterEndDate}`);
+                    console.log(`📅 Applied week filter - scanning ~7000 studies`);
                     break;
-                    
                 case 'thisMonth':
-                    // This month from 1st to now
-                    filterStartDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+                    filterStartDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
                     filterEndDate = now;
-                    console.log(`📅 Applying THIS MONTH filter: ${filterStartDate} to ${filterEndDate}`);
+                    console.log(`📅 Applied month filter - scanning ~30000 studies`);
                     break;
-                    
-                case 'thisYear':
-                    // This year from January 1st to now
-                    filterStartDate = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
-                    filterEndDate = now;
-                    console.log(`📅 Applying THIS YEAR filter: ${filterStartDate} to ${filterEndDate}`);
-                    break;
-                    
                 case 'custom':
-                    if (customDateFrom || customDateTo) {
-                        filterStartDate = customDateFrom ? new Date(customDateFrom + 'T00:00:00') : null;
-                        filterEndDate = customDateTo ? new Date(customDateTo + 'T23:59:59') : null;
-                        console.log(`📅 Applying CUSTOM filter: ${filterStartDate} to ${filterEndDate}`);
+                    if (req.query.customDateFrom || req.query.customDateTo) {
+                        filterStartDate = req.query.customDateFrom ? new Date(req.query.customDateFrom + 'T00:00:00') : null;
+                        filterEndDate = req.query.customDateTo ? new Date(req.query.customDateTo + 'T23:59:59') : null;
+                        console.log(`📅 Applied custom filter`);
                     } else {
-                        shouldApplyDateFilter = false;
-                        console.log(`📅 Custom date preset selected but no dates provided`);
+                        // Force 24h default if no custom dates provided
+                        filterStartDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                        filterEndDate = now;
+                        console.log(`📅 Custom selected but no dates - forced 24h filter`);
                     }
                     break;
-                    
                 default:
-                    shouldApplyDateFilter = false;
-                    console.log(`📅 Unknown preset: ${preset}, no date filter applied`);
+                    // Force 24h default for any unknown preset
+                    filterStartDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                    filterEndDate = now;
+                    console.log(`📅 Unknown preset - forced 24h filter`);
             }
         }
-        // Handle legacy startDate/endDate parameters
-        else if (startDate || endDate) {
-            filterStartDate = startDate ? new Date(startDate + 'T00:00:00') : null;
-            filterEndDate = endDate ? new Date(endDate + 'T23:59:59') : null;
-            console.log(`📅 Applied legacy date filter: ${filterStartDate} to ${filterEndDate}`);
-        }
-        // 🔧 FIXED: Default 24-hour filter logic - only apply if no StudyInstanceUIDs specified
-        else if (!StudyInstanceUIDs || StudyInstanceUIDs === 'undefined') {
+        // 🔧 CRITICAL: Default to 24h filter even for StudyInstanceUIDs
+        else {
+            const now = new Date();
             const hoursBack = parseInt(process.env.DEFAULT_DATE_RANGE_HOURS) || 24;
             filterStartDate = new Date(now.getTime() - hoursBack * 60 * 60 * 1000);
             filterEndDate = now;
-            console.log(`📅 Applying default ${hoursBack}-hour filter: ${filterStartDate} to ${filterEndDate}`);
-        } else {
-            shouldApplyDateFilter = false;
-            console.log(`📅 StudyInstanceUIDs provided, skipping default date filter`);
+            console.log(`📅 No date filter specified - applying default ${hoursBack}h filter`);
         }
 
-        // 🔧 FIXED: Apply the date filter with proper field mapping
+        // Apply date filter (always applied now)
         if (shouldApplyDateFilter && (filterStartDate || filterEndDate)) {
-            // Map dateType to the correct database field
-            let dateField;
-            switch (dateType) {
-                case 'StudyDate':
-                    dateField = 'studyDate';
-                    break;
-                case 'UploadDate':
-                    dateField = 'createdAt';
-                    break;
-                case 'DOB':
-                    // This would need to be applied to patient data, not study data
-                    dateField = 'createdAt'; // Fallback to upload date
-                    break;
-                default:
-                    dateField = 'createdAt';
-            }
+            const dateField = req.query.dateType === 'StudyDate' ? 'studyDate' : 'createdAt';
             
             queryFilters[dateField] = {};
-            if (filterStartDate) {
-                queryFilters[dateField].$gte = filterStartDate;
-            }
-            if (filterEndDate) {
-                queryFilters[dateField].$lte = filterEndDate;
-            }
+            if (filterStartDate) queryFilters[dateField].$gte = filterStartDate;
+            if (filterEndDate) queryFilters[dateField].$lte = filterEndDate;
             
             console.log(`📅 Applied date filter on field '${dateField}':`, {
                 gte: filterStartDate?.toISOString(),
                 lte: filterEndDate?.toISOString()
             });
-        } else {
-            console.log(`📅 No date filter applied`);
         }
 
-        // 🔧 EXISTING: Handle other filters (StudyInstanceUIDs, search, etc.)
-        if (StudyInstanceUIDs && StudyInstanceUIDs !== 'undefined') {
-            const studyUIDs = StudyInstanceUIDs.split(',').map(uid => uid.trim()).filter(uid => uid);
+        // 🔧 OVERRIDE: Handle StudyInstanceUIDs but keep time filter
+        if (req.query.StudyInstanceUIDs && req.query.StudyInstanceUIDs !== 'undefined') {
+            const studyUIDs = req.query.StudyInstanceUIDs.split(',').map(uid => uid.trim()).filter(uid => uid);
             if (studyUIDs.length > 0) {
                 queryFilters.studyInstanceUID = { $in: studyUIDs };
-                console.log(`🎯 Filtering by StudyInstanceUIDs: ${studyUIDs.join(', ')}`);
-                // When filtering by specific study UIDs, remove date filter to get exact matches
-                if (queryFilters.createdAt) {
-                    delete queryFilters.createdAt;
-                    console.log(`🎯 Removed date filter due to StudyInstanceUIDs filter`);
-                }
-                if (queryFilters.studyDate) {
-                    delete queryFilters.studyDate;
-                }
+                console.log(`🎯 Added StudyInstanceUIDs filter but keeping time filter for performance`);
+                // DON'T remove time filter anymore - keep it for performance
             }
         }
 
         // Apply search filters
-        if (search) {
+        if (req.query.search) {
             queryFilters.$or = [
-                { accessionNumber: { $regex: search, $options: 'i' } },
-                { studyInstanceUID: { $regex: search, $options: 'i' } }
+                { accessionNumber: { $regex: req.query.search, $options: 'i' } },
+                { studyInstanceUID: { $regex: req.query.search, $options: 'i' } }
             ];
-            console.log(`🔍 Applied search filter: ${search}`);
+            console.log(`🔍 Applied search filter: ${req.query.search}`);
         }
 
         // Apply category filters
-        if (status) {
-            queryFilters.workflowStatus = status;
-            console.log(`📋 Applied status filter: ${status}`);
-        } else if (category && category !== 'all') {
-            switch(category) {
+        if (req.query.status) {
+            queryFilters.workflowStatus = req.query.status;
+            console.log(`📋 Applied status filter: ${req.query.status}`);
+        } else if (req.query.category && req.query.category !== 'all') {
+            switch(req.query.category) {
                 case 'pending':
                     queryFilters.workflowStatus = { $in: ['new_study_received', 'pending_assignment'] };
                     break;
@@ -214,7 +147,7 @@ export const getAllStudiesForAdmin = async (req, res) => {
                     queryFilters.workflowStatus = { 
                         $in: [
                             'assigned_to_doctor', 'doctor_opened_report', 'report_in_progress',
-                            'report_finalized', 'report_uploaded', 'report_downloaded_radiologist', 'report_downloaded'
+                            'report_finalized','report_drafted', 'report_uploaded', 'report_downloaded_radiologist', 'report_downloaded'
                         ] 
                     };
                     break;
@@ -222,28 +155,28 @@ export const getAllStudiesForAdmin = async (req, res) => {
                     queryFilters.workflowStatus = 'final_report_downloaded';
                     break;
             }
-            console.log(`🏷️ Applied category filter: ${category}`);
+            console.log(`🏷️ Applied category filter: ${req.query.category}`);
         }
 
         // Apply modality filter
-        if (modality) {
+        if (req.query.modality) {
             queryFilters.$or = [
-                { modality: modality },
-                { modalitiesInStudy: { $in: [modality] } }
+                { modality: req.query.modality },
+                { modalitiesInStudy: { $in: [req.query.modality] } }
             ];
-            console.log(`🏥 Applied modality filter: ${modality}`);
+            console.log(`🏥 Applied modality filter: ${req.query.modality}`);
         }
 
         // Apply lab filter
-        if (labId) {
-            queryFilters.sourceLab = new mongoose.Types.ObjectId(labId);
-            console.log(`🏢 Applied lab filter: ${labId}`);
+        if (req.query.labId) {
+            queryFilters.sourceLab = new mongoose.Types.ObjectId(req.query.labId);
+            console.log(`🏢 Applied lab filter: ${req.query.labId}`);
         }
 
         // Apply priority filter
-        if (priority) {
-            queryFilters['assignment.priority'] = priority;
-            console.log(`⚡ Applied priority filter: ${priority}`);
+        if (req.query.priority) {
+            queryFilters['assignment.priority'] = req.query.priority;
+            console.log(`⚡ Applied priority filter: ${req.query.priority}`);
         }
 
         // 🔧 DEBUG: Log final query filters
@@ -266,7 +199,7 @@ export const getAllStudiesForAdmin = async (req, res) => {
                                 {
                                     case: { $in: ["$workflowStatus", [
                                         'assigned_to_doctor', 'doctor_opened_report', 'report_in_progress',
-                                        'report_finalized', 'report_uploaded', 'report_downloaded_radiologist', 'report_downloaded'
+                                        'report_finalized', 'report_uploaded', 'report_drafted', 'report_downloaded_radiologist', 'report_downloaded'
                                     ]] },
                                     then: 'inprogress'
                                 },
@@ -366,13 +299,13 @@ export const getAllStudiesForAdmin = async (req, res) => {
             },
             
             // Patient name filter after lookup
-            ...(patientName ? [{
+            ...(req.query.patientName ? [{
                 $match: {
                     $or: [
-                        { 'patient.patientNameRaw': { $regex: patientName, $options: 'i' } },
-                        { 'patient.firstName': { $regex: patientName, $options: 'i' } },
-                        { 'patient.lastName': { $regex: patientName, $options: 'i' } },
-                        { 'patient.patientID': { $regex: patientName, $options: 'i' } }
+                        { 'patient.patientNameRaw': { $regex: req.query.patientName, $options: 'i' } },
+                        { 'patient.firstName': { $regex: req.query.patientName, $options: 'i' } },
+                        { 'patient.lastName': { $regex: req.query.patientName, $options: 'i' } },
+                        { 'patient.patientID': { $regex: req.query.patientName, $options: 'i' } }
                     ]
                 }
             }] : []),
@@ -481,7 +414,16 @@ export const getAllStudiesForAdmin = async (req, res) => {
                 // Add all other necessary fields for table display
                 ReportAvailable: study.ReportAvailable || false,
                 reportFinalizedAt: study.reportFinalizedAt,
-                clinicalHistory: study.clinicalHistory || patient?.medicalHistory?.clinicalHistory || ''
+                clinicalHistory: study.clinicalHistory || patient?.medicalHistory?.clinicalHistory || '',
+
+                lastAssignedDoctor: lastAssignedDoctor?._id || null,
+                lastAssignedDoctorDetails: lastAssignedDoctor ? {
+                _id: lastAssignedDoctor._id,
+                fullName: lastAssignedDoctor.userAccount?.fullName || 'Unknown Doctor',
+                email: lastAssignedDoctor.userAccount?.email || null,
+                specialization: lastAssignedDoctor.specialization || null,
+                 isActive: lastAssignedDoctor.userAccount?.isActive || false
+                 } : null
             };
         });
 
@@ -510,8 +452,8 @@ export const getAllStudiesForAdmin = async (req, res) => {
             debug: process.env.NODE_ENV === 'development' ? {
                 appliedFilters: queryFilters,
                 dateFilter: {
-                    preset: quickDatePreset || dateFilter,
-                    dateType: dateType,
+                    preset: req.query.quickDatePreset || req.query.dateFilter,
+                    dateType: req.query.dateType,
                     startDate: filterStartDate?.toISOString(),
                     endDate: filterEndDate?.toISOString(),
                     shouldApplyDateFilter
@@ -2114,8 +2056,8 @@ export const updateDoctor = async (req, res) => {
 //             cache.del('doctors_list_*');
 
 //             return {
-//                 user: userResponse,
-//                 doctorProfile: doctorProfile[0].toObject()
+//                 user: userDocument[0].toObject(),
+                // doctorProfile: doctorProfile[0].toObject()
 //             };
 //         });
 

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { Link, Navigate, useNavigate, useLocation } from 'react-router-dom';
+// 🆕 ADD: Import the logo
+import starRadiologyLogo from '../../assets/starradiology_logo-1 (1).png';
 
 const UniversalNavbar = () => {
   const { currentUser, logout } = useAuth();
@@ -34,7 +36,7 @@ const UniversalNavbar = () => {
     switch (currentUser?.role) {
       case 'admin':
         return {
-          title: 'Star-Radiology',
+          title: 'Star-Radiology', // Keep for alt text and fallback
           subtitle: 'Administration',
           brandColor: 'text-blue-500',
           accentColor: 'bg-blue-500',
@@ -43,7 +45,6 @@ const UniversalNavbar = () => {
           links: [
             { to: '/admin/dashboard', label: 'Dashboard', icon: 'dashboard', exact: true },
             { to: '/admin/doctors', label: 'Doctors', icon: 'doctors' },
-            // { to: '/admin/labs', label: 'Labs', icon: 'labs' },
             { to: '/reports/tat', label: 'TAT Reports', icon: 'reports' },
           ]
         };
@@ -57,9 +58,6 @@ const UniversalNavbar = () => {
           activeColor: 'text-emerald-600 bg-emerald-50',
           links: [
             { to: '/doctor', label: 'Dashboard', icon: 'dashboard', exact: true },
-            // { to: '/doctor/assigned-studies', label: 'My Studies', icon: 'studies' },
-            // { to: '/doctor/reports', label: 'My Reports', icon: 'reports' },
-            // { to: '/doctor/profile', label: 'Profile', icon: 'profile' }
           ]
         };
       case 'lab_staff':
@@ -72,9 +70,6 @@ const UniversalNavbar = () => {
           activeColor: 'text-orange-600 bg-orange-50',
           links: [
             { to: '/lab', label: 'Dashboard', icon: 'dashboard', exact: true },
-            // { to: '/lab/studies', label: 'Studies', icon: 'studies' },
-            // { to: '/lab/upload', label: 'Upload', icon: 'upload' },
-            // { to: '/lab/patients', label: 'Patients', icon: 'patients' }
           ]
         };
       default:
@@ -298,19 +293,37 @@ const UniversalNavbar = () => {
         <div className="max-w-8xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             
-            {/* Left - Brand */}
+            {/* 🔧 UPDATED: Left - Brand with Logo */}
             <div className="flex items-center space-x-4">
-              {/* Logo */}
-              <div className={`flex items-center justify-center w-10 h-10 rounded-xl ${config.accentColor} shadow-lg`}>
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              
-              {/* Brand Text */}
-              <div className="hidden sm:block">
-                <h1 className={`text-xl font-bold ${config.brandColor}`}>{config.title}</h1>
-                <p className="text-xs text-gray-500 -mt-1">{config.subtitle}</p>
+              {/* Logo Container */}
+              <div className="flex items-center space-x-3">
+                {/* Logo Image */}
+                <div className="flex items-center justify-center">
+                  <img 
+                    src={starRadiologyLogo} 
+                    alt="Star Radiology" 
+                    className="h-10 w-auto object-contain"
+                    onError={(e) => {
+                      // Fallback if image fails to load
+                      console.error('Logo failed to load:', e);
+                      e.target.style.display = 'none';
+                      e.target.nextElementSibling.style.display = 'block';
+                    }}
+                  />
+                  {/* Fallback text (hidden by default, shown if image fails) */}
+                  <div className="hidden">
+                    <div className={`flex items-center justify-center w-10 h-10 rounded-xl ${config.accentColor} shadow-lg`}>
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Subtitle (Desktop only) */}
+                <div className="hidden sm:block">
+                  <p className="text-sm font-medium text-gray-600">{config.subtitle}</p>
+                </div>
               </div>
             </div>
 
@@ -526,7 +539,7 @@ const UniversalNavbar = () => {
                                 <path d="M47 43.75V47H23v-2l12.56-8.69 6.81 1.6A6.009 6.009 0 0 1 47 43.75zM23.76 39.83 19 43v4H1v-3.25a6.009 6.009 0 0 1 4.63-5.84l10.83-2.55a2 2 0 0 0 .65-.28z" style={{fill: "#64e1dc"}} />
                                 <path d="M17.11 35.08a2 2 0 0 1-.65.28l-1.473.347 5.773 4.123L17 42v5h2v-4l4.76-3.17zM30.391 38l1.749.677 3.42-2.367-2.574-.608-2.999 2.076.404.222z" style={{fill: "#00c8c8"}} />
                                 <path d="m32.986 35.7-1.446-.34a2 2 0 0 1-.65-.28l-2.631 1.753 1.728.945z" style={{fill: "#64e1dc"}} />
-                                <path d="M47 43.75a6.009 6.009 0 0 0-4.63-5.84l-6.81-1.6-3.42 2.367.065.025 2.35.608 6.218 1.6A5.923 5.923 0 0 1 45 46.75V47h2zM7.227 40.91 17.609 38l.333-.183-2.955-2.11 1.473-.347-10.83 2.55A6.009 6.009 0 0 0 1 43.75V47h2v-.25a5.923 5.923 0 0 1 4.227-5.84z" style={{fill: "#96ebe6"}} />
+                                <path d="M47 43.75a6.009 6.009 0 0 0-4.63-5.84l-6.81-1.6-3.42 2.367.065.025 2.35.608 6.218 1.6A5.923 5.923 0  a 0 1 45 46.75V47h2zM7.227 40.91 17.609 38l.333-.183-2.955-2.11 1.473-.347-10.83 2.55A6.009 6.009 0 0 0 1 43.75V47h2v-.25a5.923 5.923 0 0 1 4.227-5.84z" style={{fill: "#96ebe6"}} />
                                 <path d="m17.942 37.817 1.7-.93-2.532-1.807a2 2 0 0 1-.65.28l-1.473.347z" style={{fill: "#64e1dc"}} />
                                 <path style={{fill: "#1cadb5"}} d="M19 10h2v3h-2zM23 10h2v3h-2zM27 10h2v3h-2zM31 10h2v3h-2zM15 10h2v3h-2z" />
                                 <path d="M18 15h16v-2H14v7c0 .34.01.67.04 1h2c-.03-.33-.04-.66-.04-1v-3a2 2 0 0 1 2-2z" style={{fill: "#ffbeaa"}} />

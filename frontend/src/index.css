@@ -164,3 +164,39 @@ html::-webkit-scrollbar {
     font-size: 0.65rem;
   }
 }
+
+/* Add to your main CSS file or create a new one */
+/* Mobile responsive utilities */
+@media (max-width: 640px) {
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Improve touch targets */
+  button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Better scroll behavior */
+  .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Prevent horizontal scroll */
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 1024px) {
+
+  /* Tablet optimizations */
+  .table-cell {
+    padding: 4px 8px;
+  }
+}
