@@ -1,0 +1,117 @@
+# 🔧 PRODUCTION: .do/app.yaml
+name: medical-imaging-platform
+region: nyc
+
+databases:
+- name: medical-mongodb
+  engine: MONGODB
+  version: "6"
+  size: db-s-1vcpu-1gb
+  num_nodes: 1
+
+- name: medical-redis
+  engine: REDIS
+  version: "7"
+  size: db-s-1vcpu-1gb
+  num_nodes: 1
+
+services:
+- name: backend
+  source_dir: /backend
+  github:
+    repo: your-username/MedicalProject  # 🔧 CHANGE THIS
+    branch: main
+  run_command: node server.js
+  environment_slug: node-js
+  instance_count: 1  # 🔧 START WITH 1 for testing
+  instance_size_slug: basic-xxs
+  http_port: 3000
+  
+  envs:
+  - key: NODE_ENV
+    value: production
+  - key: PORT
+    value: "3000"
+  - key: MONGODB_URI
+    value: ${medical-mongodb.DATABASE_URL}
+  - key: REDIS_URL
+    value: ${medical-redis.DATABASE_URL}
+  - key: JWT_SECRET
+    value: ${JWT_SECRET}
+  - key: WASABI_ACCESS_KEY
+    value: ${WASABI_ACCESS_KEY}
+  - key: WASABI_SECRET_KEY
+    value: ${WASABI_SECRET_KEY}
+  - key: WASABI_REGION
+    value: ap-southeast-1
+  - key: WASABI_ENDPOINT
+    value: https://s3.ap-southeast-1.wasabisys.com
+  - key: WASABI_DICOM_BUCKET
+    value: diacom
+  - key: WASABI_DOCUMENTS_BUCKET
+    value: medicaldocuments
+  - key: WASABI_REPORTS_BUCKET
+    value: diacomreports
+  - key: WASABI_BACKUPS_BUCKET
+    value: medical-backups
+  - key: ORTHANC_URL
+    value: ${ORTHANC_URL}
+  - key: ORTHANC_USERNAME
+    value: alice
+  - key: ORTHANC_PASSWORD
+    value: ${ORTHANC_PASSWORD}
+  - key: SMTP_HOST
+    value: ${SMTP_HOST}
+  - key: SMTP_PORT
+    value: "587"
+  - key: SMTP_USER
+    value: ${SMTP_USER}
+  - key: SMTP_PASS
+    value: ${SMTP_PASS}
+  
+  health_check:
+    http_path: /api/health
+    initial_delay_seconds: 30
+    period_seconds: 10
+    timeout_seconds: 5
+    success_threshold: 1
+    failure_threshold: 3
+  
+  routes:
+  - path: /api
+  - path: /ws  # 🔧 ADD WebSocket route
+
+- name: frontend
+  source_dir: /frontend
+  github:
+    repo: your-username/MedicalProject  # 🔧 CHANGE THIS
+    branch: main
+  build_command: npm run build
+  run_command: npx serve -s dist -l 3000
+  environment_slug: node-js
+  instance_count: 1  # 🔧 START WITH 1 for testing
+  instance_size_slug: basic-xxs
+  http_port: 3000
+  
+  envs:
+  - key: VITE_API_URL
+    value: https://${APP_DOMAIN}/api
+  - key: VITE_BACKEND_URL
+    value: https://${APP_DOMAIN}/api
+  - key: VITE_WS_URL
+    value: wss://${APP_DOMAIN}/ws
+  - key: VITE_ORTHANC_URL
+    value: ${ORTHANC_URL}
+  - key: VITE_ORTHANC_USERNAME
+    value: alice
+  - key: VITE_ORTHANC_PASSWORD
+    value: ${ORTHANC_PASSWORD}
+  - key: VITE_OHIF_LOCAL_URL
+    value: ${OHIF_LOCAL_URL}
+  
+  routes:
+  - path: /
+
+static_sites: []
+functions: []
+workers: []

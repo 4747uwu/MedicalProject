@@ -15,15 +15,18 @@ import Doctor from '../models/doctorModel.js';
 export const updateWorkflowStatus = async (options) => {
   const { studyId, status, doctorId, note, user } = options;
   
-  // Validate status against allowed workflow statuses
+  // 🔧 UPDATED: Validate status against allowed workflow statuses
   const validStatuses = [
     'no_active_study',
     'new_study_received',
     'pending_assignment',
     'assigned_to_doctor',
+    'doctor_opened_report',
     'report_in_progress',
-    'report_downloaded_radiologist',
+    'report_drafted',               // 🆕 NEW: Added report_drafted status
     'report_finalized',
+    'report_uploaded',
+    'report_downloaded_radiologist',
     'report_downloaded',
     'final_report_downloaded',
     'archived'
@@ -81,6 +84,15 @@ export const updateWorkflowStatus = async (options) => {
         study.reportInfo = {};
       }
       study.reportInfo.startedAt = study.reportInfo.startedAt || timestamp;
+      break;
+    case 'report_drafted':          // 🆕 NEW: Handle draft report status
+      if (!study.reportInfo) {
+        study.reportInfo = {};
+      }
+      study.reportInfo.draftedAt = timestamp;
+      study.reportInfo.reporterName = study.reportInfo.reporterName || 
+                                     (user?.fullName || 'Unknown');
+      // Don't set finalizedAt for drafts
       break;
     case 'report_finalized':
       study.reportFinalizedAt = timestamp;
